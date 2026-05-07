@@ -1,0 +1,3197 @@
+From edbaeb565930e5bcbdb7af7ff817ef802982ff70 Mon Sep 17 00:00:00 2001
+From: "shihuai.zhang" <shihuai.zhang@sophgo.com>
+Date: Thu, 16 Jan 2025 11:18:08 +0800
+Subject: [PATCH 1/7] (sensor):support imx577 12m 25fps
+
+Change-Id: I239795d5e07ef7be1e5a7e7f5e02f90f0f2b2806
+---
+ v1/component/isp/sensor.mk                    |    2 +
+ v1/component/isp/sensor/cv182x/Makefile       |    3 +
+ .../isp/sensor/cv182x/sony_imx577/Makefile    |   36 +
+ .../sensor/cv182x/sony_imx577/imx577_cmos.c   | 1159 +++++++++++++++
+ .../cv182x/sony_imx577/imx577_cmos_ex.h       |  104 ++
+ .../cv182x/sony_imx577/imx577_cmos_param.h    |  383 +++++
+ .../cv182x/sony_imx577/imx577_sensor_ctl.c    | 1270 +++++++++++++++++
+ v2/component/isp/sensor.mk                    |    2 +
+ v2/include/cvi_sns_ctrl.h                     |    1 +
+ v2/sample/Kbuild                              |    6 +-
+ v2/sample/common/sample_comm.h                |    3 +
+ v2/sample/common/sample_common_isp.c          |   15 +
+ v2/sample/common/sample_common_vi.c           |    9 +
+ 13 files changed, 2992 insertions(+), 1 deletion(-)
+ create mode 100755 v1/component/isp/sensor/cv182x/sony_imx577/Makefile
+ create mode 100755 v1/component/isp/sensor/cv182x/sony_imx577/imx577_cmos.c
+ create mode 100755 v1/component/isp/sensor/cv182x/sony_imx577/imx577_cmos_ex.h
+ create mode 100755 v1/component/isp/sensor/cv182x/sony_imx577/imx577_cmos_param.h
+ create mode 100755 v1/component/isp/sensor/cv182x/sony_imx577/imx577_sensor_ctl.c
+
+diff --git a/v1/component/isp/sensor.mk b/v1/component/isp/sensor.mk
+index 52a484758..7e90839fe 100644
+--- a/v1/component/isp/sensor.mk
++++ b/v1/component/isp/sensor.mk
+@@ -111,11 +111,13 @@ sensor-$(CONFIG_SENSOR_SONY_IMX334)          += sony_imx334
+ sensor-$(CONFIG_SENSOR_SONY_IMX335)          += sony_imx335
+ sensor-$(CONFIG_SENSOR_SONY_IMX412)          += sony_imx412
+ sensor-$(CONFIG_SENSOR_SONY_IMX415)          += sony_imx415
++sensor-$(CONFIG_SENSOR_SONY_IMX577)			 += sony_imx577
+ sensor-$(CONFIG_SENSOR_SONY_IMX585)          += sony_imx585
+ sensor-$(CONFIG_SENSOR_SONY_IMX900)          += sony_imx900
+ sensor-$(CONFIG_SENSOR_TECHPOINT_TP2860)     += techpoint_tp2860
+ sensor-$(CONFIG_SENSOR_LONTIUM_LT6911)       += lontium_lt6911
+ 
++
+ else
+ $(error not supported chip arch cv180x/cv181x/cv182x/cv183x/cv186x)
+ endif
+diff --git a/v1/component/isp/sensor/cv182x/Makefile b/v1/component/isp/sensor/cv182x/Makefile
+index b6beaed0c..d7eee310e 100644
+--- a/v1/component/isp/sensor/cv182x/Makefile
++++ b/v1/component/isp/sensor/cv182x/Makefile
+@@ -206,6 +206,9 @@ sony_imx412:
+ sony_imx415:
+ 	$(call MAKE_SENSOR, ${@})
+ 
++sony_imx577:
++	$(call MAKE_SENSOR, ${@})
++
+ sony_imx585:
+ 	$(call MAKE_SENSOR, ${@})
+ 
+diff --git a/v1/component/isp/sensor/cv182x/sony_imx577/Makefile b/v1/component/isp/sensor/cv182x/sony_imx577/Makefile
+new file mode 100755
+index 000000000..de0bf1c01
+--- /dev/null
++++ b/v1/component/isp/sensor/cv182x/sony_imx577/Makefile
+@@ -0,0 +1,36 @@
++SHELL = /bin/bash
++ifeq ($(PARAM_FILE), )
++	PARAM_FILE=../../../../../../$(shell echo $(MW_VER))/Makefile.param
++	include $(PARAM_FILE)
++endif
++
++SDIR = $(PWD)
++SRCS = $(wildcard $(SDIR)/*.c)
++INCS = -I$(MW_INC) -I$(ISP_INC) -I$(VI_INC) -I$(KERNEL_INC) -I$(VI_INC) -I./include
++OBJS = $(SRCS:.c=.o)
++DEPS = $(SRCS:.c=.d)
++TARGET_A = $(MW_LIB)/libsns_imx577.a
++TARGET_SO = $(MW_LIB)/libsns_imx577.so
++
++EXTRA_CFLAGS = $(INCS)
++EXTRA_LDFLAGS =
++
++.PHONY : clean all
++all : $(TARGET_A) $(TARGET_SO)
++
++$(SDIR)/%.o: $(SDIR)/%.c
++	@$(CC) $(DEPFLAGS) $(CFLAGS) $(EXTRA_CFLAGS) -c $< -o $@
++	@echo [$(notdir $(CC))] $(notdir $@)
++
++$(TARGET_A): $(OBJS)
++	@$(AR) $(ARFLAGS) $@ $(OBJS)
++	@echo -e $(YELLOW)[LINK]$(END)[$(notdir $(AR))] $(notdir $(TARGET_A))
++
++$(TARGET_SO): $(OBJS)
++	@$(LD) $(LDFLAGS) $(EXTRA_LDFLAGS) -o $@ --start-group $(OBJS) --end-group
++	@echo -e $(GREEN)[LINK]$(END)[$(notdir $(LD))] $(notdir $(TARGET_SO))
++
++clean:
++	@rm -f $(OBJS) $(DEPS) $(TARGET_A) $(TARGET_SO)
++
++-include $(DEPS)
+diff --git a/v1/component/isp/sensor/cv182x/sony_imx577/imx577_cmos.c b/v1/component/isp/sensor/cv182x/sony_imx577/imx577_cmos.c
+new file mode 100755
+index 000000000..61a76b02e
+--- /dev/null
++++ b/v1/component/isp/sensor/cv182x/sony_imx577/imx577_cmos.c
+@@ -0,0 +1,1159 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <assert.h>
++#include <syslog.h>
++#include <errno.h>
++#ifdef ARCH_CV182X
++#include "cvi_type.h"
++#include "cvi_comm_video.h"
++#include <linux/cvi_vip_snsr.h>
++#else
++#include <cvi_type.h>
++#include <cvi_comm_video.h>
++#endif
++#include "cvi_debug.h"
++#include "cvi_comm_sns.h"
++#include "cvi_sns_ctrl.h"
++#include "cvi_ae_comm.h"
++#include "cvi_awb_comm.h"
++#include "cvi_ae.h"
++#include "cvi_awb.h"
++#include "cvi_isp.h"
++
++
++#include "imx577_cmos_ex.h"
++#include "imx577_cmos_param.h"
++
++#define DIV_0_TO_1(a)   ((0 == (a)) ? 1 : (a))
++#define DIV_0_TO_1_FLOAT(a) ((((a) < 1E-10) && ((a) > -1E-10)) ? 1 : (a))
++#define IMX577_ID 0x0577
++
++#define IMX577_I2C_ADDR_IS_VALID(addr)      ((addr) == IMX577_I2C_ADDR_1 || (addr) == IMX577_I2C_ADDR_2)
++/****************************************************************************
++ * global variables                                                            *
++ ****************************************************************************/
++
++ISP_SNS_STATE_S *g_pastImx577[VI_MAX_PIPE_NUM] = {CVI_NULL};
++SNS_COMBO_DEV_ATTR_S* g_pastImx577ComboDevArray[VI_MAX_PIPE_NUM] = {CVI_NULL};
++
++#define IMX577_SENSOR_GET_CTX(dev, pstCtx)   (pstCtx = g_pastImx577[dev])
++#define IMX577_SENSOR_SET_CTX(dev, pstCtx)   (g_pastImx577[dev] = pstCtx)
++#define IMX577_SENSOR_RESET_CTX(dev)         (g_pastImx577[dev] = CVI_NULL)
++#define IMX577_SENSOR_SET_COMBO(dev, pstCtx)   (g_pastImx577ComboDevArray[dev] = pstCtx)
++#define IMX577_SENSOR_GET_COMBO(dev, pstCtx)   (pstCtx = g_pastImx577ComboDevArray[dev])
++
++#define IMX577_SNNSOR_IS_1L() (imx577_rx_attr.mipi_attr.lane_id[2] == -1 && imx577_rx_attr.mipi_attr.lane_id[4] == -1)
++#define IMX577_SNNSOR_IS_2L() (imx577_rx_attr.mipi_attr.lane_id[3] == -1 && imx577_rx_attr.mipi_attr.lane_id[4] == -1)
++#define IMX577_SNNSOR_IS_4L() (imx577_rx_attr.mipi_attr.lane_id[3] != -1 && imx577_rx_attr.mipi_attr.lane_id[4] != -1)
++
++ISP_SNS_COMMBUS_U g_aunImx577_BusInfo[VI_MAX_PIPE_NUM] = {
++	[0] = { .s8I2cDev = 0},
++	[1 ... VI_MAX_PIPE_NUM - 1] = { .s8I2cDev = -1}
++};
++
++ISP_SNS_COMMADDR_U g_aunImx577_AddrInfo[VI_MAX_PIPE_NUM] = {
++	[0] = { .s8I2cAddr = 0},
++	[1 ... VI_MAX_PIPE_NUM - 1] = { .s8I2cAddr = -1}
++};
++
++CVI_U16 g_au16Imx577_GainMode[VI_MAX_PIPE_NUM] = {0};
++ISP_SNS_MIRRORFLIP_TYPE_E g_aeImx577_MirrorFip[VI_MAX_PIPE_NUM] = {0};
++
++/****************************************************************************
++ * local variables and functions                                                           *
++ ****************************************************************************/
++static ISP_FSWDR_MODE_E genFSWDRMode[VI_MAX_PIPE_NUM] = {
++	[0 ... VI_MAX_PIPE_NUM - 1] = ISP_FSWDR_NORMAL_MODE
++};
++
++// static CVI_U32 gu32MaxTimeGetCnt[VI_MAX_PIPE_NUM] = {0};
++static CVI_U32 g_au32InitExposure[VI_MAX_PIPE_NUM]  = {0};
++static CVI_U32 g_au32LinesPer500ms[VI_MAX_PIPE_NUM] = {0};
++static CVI_U16 g_au16InitWBGain[VI_MAX_PIPE_NUM][3] = {{0} };
++static CVI_U16 g_au16SampleRgain[VI_MAX_PIPE_NUM] = {0};
++static CVI_U16 g_au16SampleBgain[VI_MAX_PIPE_NUM] = {0};
++static CVI_S32 cmos_get_wdr_size(VI_PIPE ViPipe, ISP_SNS_ISP_INFO_S *pstIspCfg);
++/*****Imx577 Lines Range*****/
++#define IMX577_FULL_LINES_MAX  (0xFFFFF)
++#define IMX577_VMAX_12M20_LINEAR	0x1194
++
++/*****Imx577 Register Address*****/
++#define IMX577_HOLD_ADDR		0x0104
++
++#define IMX577_SHR_L_ADDR		0x0203
++#define IMX577_SHR_H_ADDR		0x0202
++
++#define IMX577_AGAIN_L_ADDR		0x0205
++#define IMX577_AGAIN_H_ADDR		0x0204
++#define IMX577_DGAIN_L_ADDR     0x020F
++#define IMX577_DGAIN_H_ADDR	    0x020E
++
++#define IMX577_VMAX_L_ADDR		0x0341
++#define IMX577_VMAX_H_ADDR		0x0340
++
++/*****Imx577 Size*****/
++#define SENSOR_IMX577_12M_WIDTH		4032
++#define SENSOR_IMX577_12M_HEIGHT	3000
++#define IMX577_RES_IS_12M(w, h)      ((w) == SENSOR_IMX577_12M_WIDTH && (h) == SENSOR_IMX577_12M_HEIGHT)
++
++
++static CVI_S32 cmos_get_ae_default(VI_PIPE ViPipe, AE_SENSOR_DEFAULT_S *pstAeSnsDft)
++{
++	ISP_SNS_STATE_S *pstSnsState = CVI_NULL;
++
++	CMOS_CHECK_POINTER(pstAeSnsDft);
++	IMX577_SENSOR_GET_CTX(ViPipe, pstSnsState);
++	CMOS_CHECK_POINTER(pstSnsState);
++
++	pstAeSnsDft->u32FullLinesStd = pstSnsState->u32FLStd;
++	pstAeSnsDft->u32FlickerFreq = 50 * 256;
++	pstAeSnsDft->u32FullLinesMax = IMX577_FULL_LINES_MAX;
++	pstAeSnsDft->u32HmaxTimes = (1000000) / (pstSnsState->u32FLStd * g_astImx577_mode[pstSnsState->u8ImgMode].f32MaxFps);
++
++	pstAeSnsDft->stIntTimeAccu.enAccuType = AE_ACCURACY_LINEAR;
++	pstAeSnsDft->stIntTimeAccu.f32Accuracy = 1;
++	pstAeSnsDft->stIntTimeAccu.f32Offset = 0;
++
++	pstAeSnsDft->stAgainAccu.enAccuType = AE_ACCURACY_TABLE;
++	pstAeSnsDft->stAgainAccu.f32Accuracy = 1;
++
++	pstAeSnsDft->stDgainAccu.enAccuType = AE_ACCURACY_TABLE;
++	pstAeSnsDft->stDgainAccu.f32Accuracy = 1;
++
++	pstAeSnsDft->u32ISPDgainShift = 8;
++	pstAeSnsDft->u32MinISPDgainTarget = 1 << pstAeSnsDft->u32ISPDgainShift;
++	pstAeSnsDft->u32MaxISPDgainTarget = 2 << pstAeSnsDft->u32ISPDgainShift;
++
++	if (g_au32LinesPer500ms[ViPipe] == 0)
++		pstAeSnsDft->u32LinesPer500ms = pstSnsState->u32FLStd * g_astImx577_mode[pstSnsState->u8ImgMode].f32MaxFps / 2;
++	else
++		pstAeSnsDft->u32LinesPer500ms = g_au32LinesPer500ms[ViPipe];
++	pstAeSnsDft->u32SnsStableFrame = 8;
++
++	switch (pstSnsState->enWDRMode) {
++	default:
++	case WDR_MODE_NONE:   /*linear mode*/
++		pstAeSnsDft->f32Fps = g_astImx577_mode[pstSnsState->u8ImgMode].f32MaxFps;
++		pstAeSnsDft->f32MinFps = g_astImx577_mode[pstSnsState->u8ImgMode].f32MinFps;
++		pstAeSnsDft->au8HistThresh[0] = 0xd;
++		pstAeSnsDft->au8HistThresh[1] = 0x28;
++		pstAeSnsDft->au8HistThresh[2] = 0x60;
++		pstAeSnsDft->au8HistThresh[3] = 0x80;
++
++		pstAeSnsDft->u32MaxAgain = g_astImx577_mode[pstSnsState->u8ImgMode].stAgain[0].u32Max;
++		pstAeSnsDft->u32MinAgain = g_astImx577_mode[pstSnsState->u8ImgMode].stAgain[0].u32Min;
++		pstAeSnsDft->u32MaxAgainTarget = pstAeSnsDft->u32MaxAgain;
++		pstAeSnsDft->u32MinAgainTarget = pstAeSnsDft->u32MinAgain;
++
++		pstAeSnsDft->u32MaxDgain = g_astImx577_mode[pstSnsState->u8ImgMode].stDgain[0].u32Max;
++		pstAeSnsDft->u32MinDgain = g_astImx577_mode[pstSnsState->u8ImgMode].stDgain[0].u32Min;
++		pstAeSnsDft->u32MaxDgainTarget = pstAeSnsDft->u32MaxDgain;
++		pstAeSnsDft->u32MinDgainTarget = pstAeSnsDft->u32MinDgain;
++
++		pstAeSnsDft->u8AeCompensation = 40;
++		pstAeSnsDft->u32InitAESpeed = 64;
++		pstAeSnsDft->u32InitAETolerance = 5;
++		pstAeSnsDft->u32AEResponseFrame = 4;
++		pstAeSnsDft->enAeExpMode = AE_EXP_HIGHLIGHT_PRIOR;
++		pstAeSnsDft->u32InitExposure = g_au32InitExposure[ViPipe] ? g_au32InitExposure[ViPipe] : 76151;
++
++		//shutter time [9 to (number of lines perframe -1)]
++		pstAeSnsDft->u32MaxIntTime = g_astImx577_mode[pstSnsState->u8ImgMode].stExp[0].u16Max;
++		pstAeSnsDft->u32MinIntTime = g_astImx577_mode[pstSnsState->u8ImgMode].stExp[0].u16Min;
++		pstAeSnsDft->u32MaxIntTimeTarget = 65535;
++		pstAeSnsDft->u32MinIntTimeTarget = 1;
++		break;
++
++	case WDR_MODE_2To1_LINE:
++		pstAeSnsDft->f32Fps = g_astImx577_mode[pstSnsState->u8ImgMode].f32MaxFps;
++		pstAeSnsDft->f32MinFps = g_astImx577_mode[pstSnsState->u8ImgMode].f32MinFps;
++		pstAeSnsDft->au8HistThresh[0] = 0xC;
++		pstAeSnsDft->au8HistThresh[1] = 0x18;
++		pstAeSnsDft->au8HistThresh[2] = 0x60;
++		pstAeSnsDft->au8HistThresh[3] = 0x80;
++
++		pstAeSnsDft->u32MaxIntTime = g_astImx577_mode[pstSnsState->u8ImgMode].stExp[1].u16Max;
++		pstAeSnsDft->u32MinIntTime = g_astImx577_mode[pstSnsState->u8ImgMode].stExp[0].u16Min;
++
++		pstAeSnsDft->u32MaxIntTimeTarget = 65535;
++		pstAeSnsDft->u32MinIntTimeTarget = pstAeSnsDft->u32MinIntTime;
++
++		pstAeSnsDft->u32MaxAgain = g_astImx577_mode[pstSnsState->u8ImgMode].stAgain[0].u32Max;
++		pstAeSnsDft->u32MinAgain = g_astImx577_mode[pstSnsState->u8ImgMode].stAgain[0].u32Min;
++		pstAeSnsDft->u32MaxAgainTarget = pstAeSnsDft->u32MaxAgain;
++		pstAeSnsDft->u32MinAgainTarget = pstAeSnsDft->u32MinAgain;
++
++		pstAeSnsDft->u32MaxDgain = g_astImx577_mode[pstSnsState->u8ImgMode].stDgain[0].u32Max;
++		pstAeSnsDft->u32MinDgain = g_astImx577_mode[pstSnsState->u8ImgMode].stDgain[0].u32Min;
++		pstAeSnsDft->u32MaxDgainTarget = pstAeSnsDft->u32MaxDgain;
++		pstAeSnsDft->u32MinDgainTarget = pstAeSnsDft->u32MinDgain;
++		pstAeSnsDft->u32MaxISPDgainTarget = 16 << pstAeSnsDft->u32ISPDgainShift;
++
++		pstAeSnsDft->u32InitExposure = g_au32InitExposure[ViPipe] ? g_au32InitExposure[ViPipe] : 52000;
++		pstAeSnsDft->u32InitAESpeed = 64;
++		pstAeSnsDft->u32InitAETolerance = 5;
++		pstAeSnsDft->u32AEResponseFrame = 4;
++		if (genFSWDRMode[ViPipe] == ISP_FSWDR_LONG_FRAME_MODE) {
++			pstAeSnsDft->u8AeCompensation = 64;
++			pstAeSnsDft->enAeExpMode = AE_EXP_HIGHLIGHT_PRIOR;
++		} else {
++			pstAeSnsDft->u8AeCompensation = 40;
++			pstAeSnsDft->enAeExpMode = AE_EXP_LOWLIGHT_PRIOR;
++		}
++		break;
++	}
++
++	return CVI_SUCCESS;
++}
++
++static CVI_S32 cmos_fps_set(VI_PIPE ViPipe, CVI_FLOAT f32Fps, AE_SENSOR_DEFAULT_S *pstAeSnsDft)
++{
++	ISP_SNS_STATE_S *pstSnsState = CVI_NULL;
++	CVI_U32 u32VMAX = IMX577_VMAX_12M20_LINEAR;
++	CVI_FLOAT f32MaxFps = 0;
++	CVI_FLOAT f32MinFps = 0;
++	CVI_U32 u32Vts = 0;
++	ISP_SNS_REGS_INFO_S *pstSnsRegsInfo = CVI_NULL;
++
++	CMOS_CHECK_POINTER(pstAeSnsDft);
++	IMX577_SENSOR_GET_CTX(ViPipe, pstSnsState);
++	CMOS_CHECK_POINTER(pstSnsState);
++
++	u32Vts = g_astImx577_mode[pstSnsState->u8ImgMode].u32VtsDef;
++	pstSnsRegsInfo = &pstSnsState->astSyncInfo[0].snsCfg;
++	f32MaxFps = g_astImx577_mode[pstSnsState->u8ImgMode].f32MaxFps;
++	f32MinFps = g_astImx577_mode[pstSnsState->u8ImgMode].f32MinFps;
++
++	switch (pstSnsState->u8ImgMode) {
++
++	case IMX577_MODE_12M20:
++		if ((f32Fps <= f32MaxFps) && (f32Fps >= f32MinFps)) {
++			u32VMAX = u32Vts * f32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);
++		} else {
++			CVI_TRACE_SNS(CVI_DBG_ERR, "Unsupport Fps: %f\n", f32Fps);
++			return CVI_FAILURE;
++		}
++		u32VMAX = (u32VMAX > IMX577_FULL_LINES_MAX) ? IMX577_FULL_LINES_MAX : u32VMAX;
++		break;
++	case IMX577_MODE_MASTER_12M20:
++		if ((f32Fps <= f32MaxFps) && (f32Fps >= f32MinFps)) {
++			u32VMAX = u32Vts * f32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);
++		} else {
++			CVI_TRACE_SNS(CVI_DBG_ERR, "Unsupport Fps: %f\n", f32Fps);
++			return CVI_FAILURE;
++		}
++		u32VMAX = (u32VMAX > IMX577_FULL_LINES_MAX) ? IMX577_FULL_LINES_MAX : u32VMAX;
++		break;
++	case IMX577_MODE_SLAVE_12M20:
++		if ((f32Fps <= f32MaxFps) && (f32Fps >= f32MinFps)) {
++			u32VMAX = u32Vts * f32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);
++		} else {
++			CVI_TRACE_SNS(CVI_DBG_ERR, "Unsupport Fps: %f\n", f32Fps);
++			return CVI_FAILURE;
++		}
++		u32VMAX = (u32VMAX > IMX577_FULL_LINES_MAX) ? IMX577_FULL_LINES_MAX : u32VMAX;
++		break;
++	default:
++		CVI_TRACE_SNS(CVI_DBG_ERR, "Unsupport sensor mode: %d\n", pstSnsState->u8ImgMode);
++		return CVI_FAILURE;
++	}
++
++	if (pstSnsState->enWDRMode == WDR_MODE_NONE) {
++		pstSnsRegsInfo->astI2cData[LINEAR_VMAX_L].u32Data = (u32VMAX & 0xFF);
++		pstSnsRegsInfo->astI2cData[LINEAR_VMAX_H].u32Data = ((u32VMAX & 0xFF00) >> 8);
++	} else {
++		CVI_TRACE_SNS(CVI_DBG_ERR, "Unsupport wdr mode: %d\n", pstSnsState->enWDRMode);
++		return CVI_FAILURE;
++	}
++
++
++	pstAeSnsDft->f32Fps = f32Fps;
++	pstAeSnsDft->u32LinesPer500ms = pstSnsState->u32FLStd * f32Fps / 2;
++	pstAeSnsDft->u32FullLinesStd = pstSnsState->u32FLStd;
++	pstAeSnsDft->u32MaxIntTime = pstSnsState->u32FLStd - 1;
++	pstSnsState->au32FL[0] = pstSnsState->u32FLStd;
++	pstAeSnsDft->u32FullLines = pstSnsState->au32FL[0];
++	pstAeSnsDft->u32HmaxTimes = (1000000) / (pstSnsState->u32FLStd * DIV_0_TO_1_FLOAT(f32Fps));
++
++	return CVI_SUCCESS;
++}
++
++static CVI_S32 cmos_inttime_update(VI_PIPE ViPipe, CVI_U32 *u32IntTime)
++{
++	ISP_SNS_STATE_S *pstSnsState = CVI_NULL;
++	ISP_SNS_REGS_INFO_S *pstSnsRegsInfo = CVI_NULL;
++	CVI_U32 u32Value = 0;
++
++	IMX577_SENSOR_GET_CTX(ViPipe, pstSnsState);
++	CMOS_CHECK_POINTER(pstSnsState);
++	CMOS_CHECK_POINTER(u32IntTime);
++	pstSnsRegsInfo = &pstSnsState->astSyncInfo[0].snsCfg;
++
++	if (WDR_MODE_NONE == pstSnsState->enWDRMode) {
++		u32Value = *u32IntTime;
++
++		pstSnsRegsInfo->astI2cData[LINEAR_SHR_L].u32Data = (u32Value & 0xFF);
++		pstSnsRegsInfo->astI2cData[LINEAR_SHR_H].u32Data = ((u32Value & 0xFF00) >> 8);
++	} else {
++		CVI_TRACE_SNS(CVI_DBG_ERR, "Unsupport wdr mode\n");
++		return CVI_FAILURE;
++	}
++
++	return CVI_SUCCESS;
++
++}
++
++struct gain_tbl_info_s {
++	CVI_U16	gainMax;
++	CVI_U16	idxBase;
++	CVI_U8	regGain;
++	CVI_U8	regGainFineBase;
++	CVI_U8	regGainFineStep;
++};
++
++static struct gain_tbl_info_s DgainInfo[] = {
++	{
++		.gainMax = 1984,
++		.idxBase = 0,
++		.regGain = 0x01,
++		.regGainFineStep = 16
++	},
++	{
++		.gainMax = 3008,
++		.idxBase = 16,
++		.regGain = 0x02,
++		.regGainFineStep = 16
++	},
++	{
++		.gainMax = 4032,
++		.idxBase = 32,
++		.regGain = 0x03,
++		.regGainFineStep = 16
++	},
++	{
++		.gainMax = 5056,
++		.idxBase = 48,
++		.regGain = 0x04,
++		.regGainFineStep = 16
++	},
++	{
++		.gainMax = 6080,
++		.idxBase = 64,
++		.regGain = 0x05,
++		.regGainFineStep = 16
++	},
++	{
++		.gainMax = 7104,
++		.idxBase = 80,
++		.regGain = 0x06,
++		.regGainFineStep = 16
++	},
++	{
++		.gainMax = 8128,
++		.idxBase = 96,
++		.regGain = 0x07,
++		.regGainFineStep = 16
++	},
++	{
++		.gainMax = 9152,
++		.idxBase = 112,
++		.regGain = 0x08,
++		.regGainFineStep = 16
++	},
++	{
++		.gainMax = 10176,
++		.idxBase = 128,
++		.regGain = 0x09,
++		.regGainFineStep = 16
++	},
++	{
++		.gainMax = 11200,
++		.idxBase = 144,
++		.regGain = 0x0a,
++		.regGainFineStep = 16
++	},
++	{
++		.gainMax = 12224,
++		.idxBase = 160,
++		.regGain = 0x0b,
++		.regGainFineStep = 16
++	},
++	{
++		.gainMax = 13248,
++		.idxBase = 176,
++		.regGain = 0x0c,
++		.regGainFineStep = 16
++	},
++	{
++		.gainMax = 14272,
++		.idxBase = 192,
++		.regGain = 0x0d,
++		.regGainFineStep = 16
++	},
++	{
++		.gainMax = 15296,
++		.idxBase = 208,
++		.regGain = 0x0e,
++		.regGainFineStep = 16
++	},
++	{
++		.gainMax = 16320,
++		.idxBase = 224,
++		.regGain = 0x0f,
++		.regGainFineStep = 16,
++	},
++};
++
++static CVI_U32 Dgain_table[] = {
++	1024, 1088, 1152, 1216, 1280, 1344, 1408, 1472, 1536, 1600, 1664, 1728, 1792, 1856, 1920,
++	1984, 2048, 2112, 2176, 2240, 2304, 2368, 2432, 2496, 2560, 2624, 2688, 2752, 2816, 2880,
++	2944, 3008, 3072, 3136, 3200, 3264, 3328, 3392, 3456, 3520, 3584, 3648, 3712, 3776, 3840,
++	3904, 3968, 4032, 4096, 4160, 4224, 4288, 4352, 4416, 4480, 4544, 4608, 4672, 4736, 4800,
++	4864, 4928, 4992, 5056, 5120, 5184, 5248, 5312, 5376, 5440, 5504, 5568, 5632, 5696, 5760,
++	5824, 5888, 5952, 6016, 6080, 6144, 6208, 6272, 6336, 6400, 6464, 6528, 6592, 6656, 6720,
++	6784, 6848, 6912, 6976, 7040, 7104, 7168, 7232, 7296, 7360, 7424, 7488, 7552, 7616, 7680,
++	7744, 7808, 7872, 7936, 8000, 8064, 8128, 8192, 8256, 8320, 8384, 8448, 8512, 8576, 8640,
++	8704, 8768, 8832, 8896, 8960, 9024, 9088, 9152, 9216, 9280, 9344, 9408, 9472, 9536, 9600,
++	9664, 9728, 9792, 9856, 9920, 9984, 10048, 10112, 10176, 10240, 10304, 10368, 10432, 10496,
++	10560, 10624, 10688, 10752, 10816, 10880, 10944, 11008, 11072, 11136, 11200, 11264, 11328,
++	11392, 11456, 11520, 11584, 11648, 11712, 11776, 11840, 11904, 11968, 12032, 12096, 12160,
++	12224, 12288, 12352, 12416, 12480, 12544, 12608, 12672, 12736, 12800, 12864, 12928, 12992,
++	13056, 13120, 13184, 13248, 13312, 13376, 13440, 13504, 13568, 13632, 13696, 13760, 13824,
++	13888, 13952, 14016, 14080, 14144, 14208, 14272, 14336, 14400, 14464, 14528, 14592, 14656,
++	14720, 14784, 14848, 14912, 14976, 15040, 15104, 15168, 15232, 15296, 15360, 15424, 15488,
++	15552, 15616, 15680, 15744, 15808, 15872, 15936, 16000, 16064, 16128, 16192, 16256, 16320
++};
++
++static CVI_U32 Again_table[] = {
++	1024, 1056, 1088, 1120, 1152, 1184, 1216, 1248, 1280, 1312, 1344, 1376, 1408, 1440, 1472, 1504,
++	1536, 1568, 1600, 1632, 1664, 1696, 1728, 1760, 1792, 1824, 1856, 1888, 1920, 1952, 1984, 2016,
++	2048, 2112, 2176, 2240, 2304, 2368, 2432, 2496, 2560, 2624, 2688, 2752, 2816, 2880, 2944, 3008,
++	3072, 3136, 3200, 3264, 3328, 3392, 3456, 3520, 3584, 3648, 3712, 3776, 3840, 3904, 3968, 4032,
++	4096, 4224, 4352, 4480, 4608, 4736, 4864, 4992, 5120, 5248, 5376, 5504, 5632, 5760, 5888, 6016,
++	6144, 6272, 6400, 6528, 6656, 6784, 6912, 7040, 7168, 7296, 7424, 7552, 7680, 7808, 7936, 8064,
++	8192, 8448, 8704, 8960, 9216, 9472, 9728, 9984, 10240,10496,10752,11008,11264,11520,11776,12032,
++	12288,12544,12800,13056,13312,13568,13824,14080,14336,14592,14848,15104,15360,15616,15872,16128,
++	16640,16896,17152,17152,17408,17664,17920,18176,18432,18688,18944,19200,19456,19712,19968,20224,
++	20480,20736,20992,21248,21504,21760,22016,22272,22528
++};
++
++static const CVI_U32 again_table_size = ARRAY_SIZE(Again_table);
++static const CVI_U32 dgain_table_size = ARRAY_SIZE(Dgain_table);
++
++static CVI_S32 cmos_again_calc_table(VI_PIPE ViPipe, CVI_U32 *pu32AgainLin, CVI_U32 *pu32AgainDb)
++{
++	CVI_U32 i;
++
++	(void) ViPipe;
++
++	CMOS_CHECK_POINTER(pu32AgainLin);
++	CMOS_CHECK_POINTER(pu32AgainDb);
++
++	if (*pu32AgainLin >= Again_table[again_table_size - 1]) {
++		*pu32AgainLin = Again_table[again_table_size - 1];
++		*pu32AgainDb = again_table_size - 1;
++		return CVI_SUCCESS;
++	}
++
++	for (i = 1; i < again_table_size; i++) {
++		if (*pu32AgainLin < Again_table[i]) {
++			*pu32AgainLin = Again_table[i - 1];
++			*pu32AgainDb = i - 1;
++			break;
++		}
++	}
++	return CVI_SUCCESS;
++}
++
++static CVI_S32 cmos_dgain_calc_table(VI_PIPE ViPipe, CVI_U32 *pu32DgainLin, CVI_U32 *pu32DgainDb)
++{
++	CVI_U32 i;
++
++	(void)ViPipe;
++
++	CMOS_CHECK_POINTER(pu32DgainLin);
++	CMOS_CHECK_POINTER(pu32DgainDb);
++
++	if (*pu32DgainLin >= Dgain_table[dgain_table_size - 1]) {
++		*pu32DgainLin = Dgain_table[dgain_table_size - 1];
++		*pu32DgainDb = dgain_table_size - 1;
++		return CVI_SUCCESS;
++	}
++
++	for (i = 1; i < dgain_table_size; i++) {
++		if (*pu32DgainLin < Dgain_table[i]) {
++			*pu32DgainLin = Dgain_table[i - 1];
++			*pu32DgainDb = i - 1;
++			break;
++		}
++	}
++	return CVI_SUCCESS;
++}
++
++static CVI_S32 cmos_gains_update(VI_PIPE ViPipe, CVI_U32 *pu32Again, CVI_U32 *pu32Dgain)
++{
++	ISP_SNS_STATE_S *pstSnsState = CVI_NULL;
++	ISP_SNS_REGS_INFO_S *pstSnsRegsInfo = CVI_NULL;
++	CVI_U32 u32Again;
++	CVI_U32 u32AaginVal;
++	CVI_U32 u32Dgain;
++	int i, tbl_num;
++	struct gain_tbl_info_s *info;
++
++	IMX577_SENSOR_GET_CTX(ViPipe, pstSnsState);
++	CMOS_CHECK_POINTER(pstSnsState);
++	CMOS_CHECK_POINTER(pu32Again);
++	CMOS_CHECK_POINTER(pu32Dgain);
++	pstSnsRegsInfo = &pstSnsState->astSyncInfo[0].snsCfg;
++
++	if (pstSnsState->enWDRMode == WDR_MODE_NONE) {
++		/* linear mode */
++		u32Again = pu32Again[0];
++		u32Dgain = pu32Dgain[0];
++
++		/* Aagain */
++		u32AaginVal = 1024 - ((1024 * 1024) /Again_table[u32Again]);
++
++		pstSnsRegsInfo->astI2cData[LINEAR_AGAIN_L].u32Data = (u32AaginVal & 0xFF);
++		pstSnsRegsInfo->astI2cData[LINEAR_AGAIN_H].u32Data =((u32AaginVal & 0x300)>> 8);
++
++		/* find Dgain register setting. */
++		tbl_num = sizeof(DgainInfo)/sizeof(struct gain_tbl_info_s);
++		for (i = tbl_num - 1; i >= 0; i--) {
++			info = &DgainInfo[i];
++
++			if (u32Dgain >= info->idxBase)
++				break;
++		}
++
++		pstSnsRegsInfo->astI2cData[LINEAR_DGAIN_H].u32Data = (info->regGain & 0xFF);
++		u32Dgain = (u32Dgain - info->idxBase) * info->regGainFineStep;
++		pstSnsRegsInfo->astI2cData[LINEAR_DGAIN_L].u32Data = u32Dgain & 0xFF;
++
++	}
++
++	return CVI_SUCCESS;
++}
++
++
++
++// /* Only used in LINE_WDR mode */
++// static CVI_S32 cmos_ae_fswdr_attr_set(VI_PIPE ViPipe, AE_FSWDR_ATTR_S *pstAeFSWDRAttr)
++// {
++// 	CMOS_CHECK_POINTER(pstAeFSWDRAttr);
++
++// 	genFSWDRMode[ViPipe] = pstAeFSWDRAttr->enFSWDRMode;
++// 	gu32MaxTimeGetCnt[ViPipe] = 0;
++
++// 	return CVI_SUCCESS;
++// }
++
++static CVI_S32 cmos_init_ae_exp_function(AE_SENSOR_EXP_FUNC_S *pstExpFuncs)
++{
++	CMOS_CHECK_POINTER(pstExpFuncs);
++
++	memset(pstExpFuncs, 0, sizeof(AE_SENSOR_EXP_FUNC_S));
++
++	pstExpFuncs->pfn_cmos_get_ae_default    = cmos_get_ae_default;
++	pstExpFuncs->pfn_cmos_fps_set           = cmos_fps_set;
++	pstExpFuncs->pfn_cmos_inttime_update    = cmos_inttime_update;
++	pstExpFuncs->pfn_cmos_gains_update      = cmos_gains_update;
++	pstExpFuncs->pfn_cmos_again_calc_table  = cmos_again_calc_table;
++	pstExpFuncs->pfn_cmos_dgain_calc_table  = cmos_dgain_calc_table;
++	// pstExpFuncs->pfn_cmos_get_inttime_max   = cmos_get_inttime_max;
++	// pstExpFuncs->pfn_cmos_ae_fswdr_attr_set = cmos_ae_fswdr_attr_set;
++
++	return CVI_SUCCESS;
++}
++
++static CVI_S32 cmos_get_awb_default(VI_PIPE ViPipe, AWB_SENSOR_DEFAULT_S *pstAwbSnsDft)
++{
++	(void) ViPipe;
++	CMOS_CHECK_POINTER(pstAwbSnsDft);
++	memset(pstAwbSnsDft, 0, sizeof(AWB_SENSOR_DEFAULT_S));
++
++	pstAwbSnsDft->u16InitGgain = 1024;
++	pstAwbSnsDft->u8AWBRunInterval = 1;
++
++	return CVI_SUCCESS;
++}
++
++static CVI_S32 cmos_init_awb_exp_function(AWB_SENSOR_EXP_FUNC_S *pstExpFuncs)
++{
++	CMOS_CHECK_POINTER(pstExpFuncs);
++
++	memset(pstExpFuncs, 0, sizeof(AWB_SENSOR_EXP_FUNC_S));
++
++	pstExpFuncs->pfn_cmos_get_awb_default = cmos_get_awb_default;
++
++	return CVI_SUCCESS;
++}
++
++static CVI_S32 cmos_get_isp_default(VI_PIPE ViPipe, ISP_CMOS_DEFAULT_S *pstDef)
++{
++	(void) ViPipe;
++
++	memset(pstDef, 0, sizeof(ISP_CMOS_DEFAULT_S));
++
++	memcpy(pstDef->stNoiseCalibration.CalibrationCoef,
++		&g_stIspNoiseCalibratio, sizeof(ISP_CMOS_NOISE_CALIBRATION_S));
++
++	return CVI_SUCCESS;
++}
++
++static CVI_S32 cmos_get_blc_default(VI_PIPE ViPipe, ISP_CMOS_BLACK_LEVEL_S *pstBlc)
++{
++	(void) ViPipe;
++
++	CMOS_CHECK_POINTER(pstBlc);
++
++	memset(pstBlc, 0, sizeof(ISP_CMOS_BLACK_LEVEL_S));
++
++	memcpy(pstBlc,
++		&g_stIspBlcCalibratio, sizeof(ISP_CMOS_BLACK_LEVEL_S));
++	return CVI_SUCCESS;
++}
++
++static CVI_S32 cmos_get_wdr_size(VI_PIPE ViPipe, ISP_SNS_ISP_INFO_S *pstIspCfg)
++{
++	const IMX577_MODE_S *pstMode = CVI_NULL;
++	ISP_SNS_STATE_S *pstSnsState = CVI_NULL;
++
++	IMX577_SENSOR_GET_CTX(ViPipe, pstSnsState);
++	CMOS_CHECK_POINTER(pstSnsState);
++	pstMode = &g_astImx577_mode[pstSnsState->u8ImgMode];
++
++	if (pstSnsState->enWDRMode != WDR_MODE_NONE) {
++		pstIspCfg->frm_num = 2;
++		memcpy(&pstIspCfg->img_size[0], &pstMode->astImg[0], sizeof(ISP_WDR_SIZE_S));
++		memcpy(&pstIspCfg->img_size[1], &pstMode->astImg[1], sizeof(ISP_WDR_SIZE_S));
++	} else {
++		pstIspCfg->frm_num = 1;
++		memcpy(&pstIspCfg->img_size[0], &pstMode->astImg[0], sizeof(ISP_WDR_SIZE_S));
++	}
++
++	return CVI_SUCCESS;
++}
++
++static CVI_S32 cmos_set_wdr_mode(VI_PIPE ViPipe, CVI_U8 u8Mode)
++{
++	ISP_SNS_STATE_S *pstSnsState = CVI_NULL;
++
++	IMX577_SENSOR_GET_CTX(ViPipe, pstSnsState);
++	CMOS_CHECK_POINTER(pstSnsState);
++
++	pstSnsState->bSyncInit = CVI_FALSE;
++
++	switch (u8Mode) {
++	case WDR_MODE_NONE:
++		if (pstSnsState->u8ImgMode == IMX577_MODE_12M20_WDR)
++			pstSnsState->u8ImgMode = IMX577_MODE_12M20;
++		else {
++		}
++		pstSnsState->enWDRMode = WDR_MODE_NONE;
++		pstSnsState->u32FLStd = g_astImx577_mode[pstSnsState->u8ImgMode].u32VtsDef;
++		syslog(LOG_INFO, "WDR_MODE_NONE\n");
++		break;
++	default:
++		CVI_TRACE_SNS(CVI_DBG_ERR, "Unknown mode!\n");
++		return CVI_FAILURE;
++	}
++
++	pstSnsState->au32FL[0] = pstSnsState->u32FLStd;
++	pstSnsState->au32FL[1] = pstSnsState->au32FL[0];
++	memset(pstSnsState->au32WDRIntTime, 0, sizeof(pstSnsState->au32WDRIntTime));
++
++	return CVI_SUCCESS;
++}
++
++static CVI_U32 sensor_cmp_wdr_size(ISP_SNS_ISP_INFO_S *pstWdr1, ISP_SNS_ISP_INFO_S *pstWdr2)
++{
++	CVI_U32 i;
++
++	if (pstWdr1->frm_num != pstWdr2->frm_num)
++		goto _mismatch;
++	for (i = 0; i < 2; i++) {
++		if (pstWdr1->img_size[i].stSnsSize.u32Width != pstWdr2->img_size[i].stSnsSize.u32Width)
++			goto _mismatch;
++		if (pstWdr1->img_size[i].stSnsSize.u32Height != pstWdr2->img_size[i].stSnsSize.u32Height)
++			goto _mismatch;
++		if (pstWdr1->img_size[i].stWndRect.s32X != pstWdr2->img_size[i].stWndRect.s32X)
++			goto _mismatch;
++		if (pstWdr1->img_size[i].stWndRect.s32Y != pstWdr2->img_size[i].stWndRect.s32Y)
++			goto _mismatch;
++		if (pstWdr1->img_size[i].stWndRect.u32Width != pstWdr2->img_size[i].stWndRect.u32Width)
++			goto _mismatch;
++		if (pstWdr1->img_size[i].stWndRect.u32Height != pstWdr2->img_size[i].stWndRect.u32Height)
++			goto _mismatch;
++	}
++
++	return 0;
++_mismatch:
++	return 1;
++}
++
++static CVI_S32 cmos_get_sns_regs_info(VI_PIPE ViPipe, ISP_SNS_SYNC_INFO_S *pstSnsSyncInfo)
++{
++	CVI_U32 i;
++	ISP_SNS_STATE_S *pstSnsState = CVI_NULL;
++	ISP_SNS_REGS_INFO_S *pstSnsRegsInfo = CVI_NULL;
++	ISP_SNS_SYNC_INFO_S *pstCfg0 = CVI_NULL;
++	ISP_SNS_SYNC_INFO_S *pstCfg1 = CVI_NULL;
++	ISP_I2C_DATA_S *pstI2c_data = CVI_NULL;
++
++	CMOS_CHECK_POINTER(pstSnsSyncInfo);
++	IMX577_SENSOR_GET_CTX(ViPipe, pstSnsState);
++	CMOS_CHECK_POINTER(pstSnsState);
++	pstSnsRegsInfo = &pstSnsSyncInfo->snsCfg;
++	pstCfg0 = &pstSnsState->astSyncInfo[0];
++	pstCfg1 = &pstSnsState->astSyncInfo[1];
++	pstI2c_data = pstCfg0->snsCfg.astI2cData;
++
++	if ((pstSnsState->bSyncInit == CVI_FALSE) || (pstSnsRegsInfo->bConfig == CVI_FALSE)) {
++		pstCfg0->snsCfg.enSnsType = SNS_I2C_TYPE;
++		pstCfg0->snsCfg.unComBus.s8I2cDev = g_aunImx577_BusInfo[ViPipe].s8I2cDev;
++		pstCfg0->snsCfg.u8Cfg2ValidDelayMax = 2;
++		pstCfg0->snsCfg.use_snsr_sram = CVI_TRUE;
++		pstCfg0->snsCfg.u32RegNum = (WDR_MODE_2To1_LINE == pstSnsState->enWDRMode) ?
++					WDR_REGS_NUM : LINEAR_REGS_NUM;
++
++		for (i = 0; i < pstCfg0->snsCfg.u32RegNum; i++) {
++			pstI2c_data[i].bUpdate = CVI_TRUE;
++			pstI2c_data[i].u8DevAddr = g_aunImx577_AddrInfo[ViPipe].s8I2cAddr;
++			pstI2c_data[i].u32AddrByteNum = imx577_addr_byte;
++			pstI2c_data[i].u32DataByteNum = imx577_data_byte;
++		}
++
++		switch (pstSnsState->enWDRMode) {
++		case WDR_MODE_NONE:
++			pstI2c_data[LINEAR_HOLD_START].u32RegAddr = IMX577_HOLD_ADDR;
++			pstI2c_data[LINEAR_HOLD_START].u32Data = 0x1;
++			pstI2c_data[LINEAR_SHR_H].u32RegAddr = IMX577_SHR_H_ADDR;
++			pstI2c_data[LINEAR_SHR_L].u32RegAddr = IMX577_SHR_L_ADDR;
++			pstI2c_data[LINEAR_SHR_H].u32RegAddr = IMX577_SHR_H_ADDR;
++
++			pstI2c_data[LINEAR_AGAIN_L].u32RegAddr = IMX577_AGAIN_L_ADDR;
++			pstI2c_data[LINEAR_AGAIN_H].u32RegAddr = IMX577_AGAIN_H_ADDR;
++
++			pstI2c_data[LINEAR_DGAIN_L].u32RegAddr = IMX577_DGAIN_L_ADDR;
++			pstI2c_data[LINEAR_DGAIN_H].u32RegAddr = IMX577_DGAIN_H_ADDR;
++
++			pstI2c_data[LINEAR_VMAX_L].u32RegAddr = IMX577_VMAX_L_ADDR;
++			pstI2c_data[LINEAR_VMAX_H].u32RegAddr = IMX577_VMAX_H_ADDR;
++			pstI2c_data[LINEAR_HOLD_END].u32RegAddr = IMX577_HOLD_ADDR;
++			pstI2c_data[LINEAR_HOLD_END].u32Data = 0x0;
++
++			pstCfg0->ispCfg.u8DelayFrmNum = 0;
++			break;
++		default:
++			pstI2c_data[LINEAR_HOLD_START].u32RegAddr = IMX577_HOLD_ADDR;
++			pstI2c_data[LINEAR_HOLD_START].u32Data = 0x1;
++			pstI2c_data[LINEAR_SHR_H].u32RegAddr = IMX577_SHR_H_ADDR;
++			pstI2c_data[LINEAR_SHR_L].u32RegAddr = IMX577_SHR_L_ADDR;
++			pstI2c_data[LINEAR_SHR_H].u32RegAddr = IMX577_SHR_H_ADDR;
++
++			pstI2c_data[LINEAR_AGAIN_L].u32RegAddr = IMX577_AGAIN_L_ADDR;
++			pstI2c_data[LINEAR_AGAIN_H].u32RegAddr = IMX577_AGAIN_H_ADDR;
++
++			pstI2c_data[LINEAR_DGAIN_L].u32RegAddr = IMX577_DGAIN_L_ADDR;
++			pstI2c_data[LINEAR_DGAIN_H].u32RegAddr = IMX577_DGAIN_H_ADDR;
++
++			pstI2c_data[LINEAR_VMAX_L].u32RegAddr = IMX577_VMAX_L_ADDR;
++			pstI2c_data[LINEAR_VMAX_H].u32RegAddr = IMX577_VMAX_H_ADDR;
++			pstI2c_data[LINEAR_HOLD_END].u32RegAddr = IMX577_HOLD_ADDR;
++			pstI2c_data[LINEAR_HOLD_END].u32Data = 0x0;
++
++			pstCfg0->ispCfg.u8DelayFrmNum = 0;
++			break;
++		}
++
++		pstSnsState->bSyncInit = CVI_TRUE;
++		pstCfg0->snsCfg.need_update = CVI_TRUE;
++		/* recalcualte WDR size */
++		cmos_get_wdr_size(ViPipe, &pstCfg0->ispCfg);
++		pstCfg0->ispCfg.need_update = CVI_TRUE;
++	} else {
++		pstCfg0->snsCfg.need_update = CVI_FALSE;
++		for (i = 0; i < pstCfg0->snsCfg.u32RegNum; i++) {
++			if (pstCfg0->snsCfg.astI2cData[i].u32Data == pstCfg1->snsCfg.astI2cData[i].u32Data) {
++				pstCfg0->snsCfg.astI2cData[i].bUpdate = CVI_FALSE;
++			} else {
++				pstCfg0->snsCfg.astI2cData[i].bUpdate = CVI_TRUE;
++				pstCfg0->snsCfg.need_update = CVI_TRUE;
++			}
++		}
++		if (pstCfg0->snsCfg.need_update) {
++			pstI2c_data[LINEAR_HOLD_START].bUpdate = CVI_TRUE;
++			pstI2c_data[LINEAR_HOLD_END].bUpdate = CVI_TRUE;
++		}
++		/* check update isp crop or not */
++		pstCfg0->ispCfg.need_update = (sensor_cmp_wdr_size(&pstCfg0->ispCfg, &pstCfg1->ispCfg) ?
++				CVI_TRUE : CVI_FALSE);
++	}
++
++	pstSnsRegsInfo->bConfig = CVI_FALSE;
++	memcpy(pstSnsSyncInfo, &pstSnsState->astSyncInfo[0], sizeof(ISP_SNS_SYNC_INFO_S));
++	memcpy(&pstSnsState->astSyncInfo[1], &pstSnsState->astSyncInfo[0], sizeof(ISP_SNS_SYNC_INFO_S));
++	pstSnsState->au32FL[1] = pstSnsState->au32FL[0];
++
++	return CVI_SUCCESS;
++}
++
++static CVI_S32 cmos_set_image_mode(VI_PIPE ViPipe, ISP_CMOS_SENSOR_IMAGE_MODE_S *pstSensorImageMode)
++{
++	CVI_U8 u8SensorImageMode = 0;
++	ISP_SNS_STATE_S *pstSnsState = CVI_NULL;
++
++	CMOS_CHECK_POINTER(pstSensorImageMode);
++	IMX577_SENSOR_GET_CTX(ViPipe, pstSnsState);
++	CMOS_CHECK_POINTER(pstSnsState);
++
++	u8SensorImageMode = pstSnsState->u8ImgMode;
++	pstSnsState->bSyncInit = CVI_FALSE;
++
++	if (pstSensorImageMode->f32Fps <= 30) {
++		if (pstSnsState->enWDRMode == WDR_MODE_NONE) {
++			if (IMX577_RES_IS_12M(pstSensorImageMode->u16Width, pstSensorImageMode->u16Height)) {
++				if (pstSensorImageMode->u8EnableMaster == 1) {
++					u8SensorImageMode = IMX577_MODE_MASTER_12M20;
++				} else if (pstSensorImageMode->u8EnableMaster == 0) {
++					u8SensorImageMode = IMX577_MODE_SLAVE_12M20;
++				} else {
++					u8SensorImageMode = IMX577_MODE_12M20;
++				}
++			} else {
++				CVI_TRACE_SNS(CVI_DBG_ERR, "Not support! Width:%d, Height:%d, Fps:%f, WDRMode:%d\n",
++				       pstSensorImageMode->u16Width,
++				       pstSensorImageMode->u16Height,
++				       pstSensorImageMode->f32Fps,
++				       pstSnsState->enWDRMode);
++				return CVI_FAILURE;
++			}
++		} else if (pstSnsState->enWDRMode == WDR_MODE_2To1_LINE) {
++			if (IMX577_RES_IS_12M(pstSensorImageMode->u16Width, pstSensorImageMode->u16Height))
++				u8SensorImageMode = IMX577_MODE_12M20_WDR;
++			else {
++				CVI_TRACE_SNS(CVI_DBG_ERR, "Not support! Width:%d, Height:%d, Fps:%f, WDRMode:%d\n",
++				       pstSensorImageMode->u16Width,
++				       pstSensorImageMode->u16Height,
++				       pstSensorImageMode->f32Fps,
++				       pstSnsState->enWDRMode);
++				return CVI_FAILURE;
++			}
++		} else {
++			CVI_TRACE_SNS(CVI_DBG_ERR, "Not support! Width:%d, Height:%d, Fps:%f, WDRMode:%d\n",
++			       pstSensorImageMode->u16Width,
++			       pstSensorImageMode->u16Height,
++			       pstSensorImageMode->f32Fps,
++			       pstSnsState->enWDRMode);
++			return CVI_FAILURE;
++		}
++	} else {
++	}
++
++	if ((pstSnsState->bInit == CVI_TRUE) && (u8SensorImageMode == pstSnsState->u8ImgMode)) {
++		return CVI_FAILURE;
++	}
++
++	pstSnsState->u8ImgMode = u8SensorImageMode;
++
++	return CVI_SUCCESS;
++}
++
++static CVI_VOID sensor_mirror_flip(VI_PIPE ViPipe, ISP_SNS_MIRRORFLIP_TYPE_E eSnsMirrorFlip)
++{
++	ISP_SNS_STATE_S *pstSnsState = CVI_NULL;
++
++	IMX577_SENSOR_GET_CTX(ViPipe, pstSnsState);
++	CMOS_CHECK_POINTER_VOID(pstSnsState);
++	if (pstSnsState->bInit == CVI_TRUE && g_aeImx577_MirrorFip[ViPipe] != eSnsMirrorFlip) {
++		imx577_mirror_flip(ViPipe, eSnsMirrorFlip);
++		g_aeImx577_MirrorFip[ViPipe] = eSnsMirrorFlip;
++	}
++}
++
++static CVI_VOID sensor_global_init(VI_PIPE ViPipe)
++{
++	ISP_SNS_STATE_S *pstSnsState = CVI_NULL;
++
++	IMX577_SENSOR_GET_CTX(ViPipe, pstSnsState);
++	CMOS_CHECK_POINTER_VOID(pstSnsState);
++
++	pstSnsState->bInit = CVI_FALSE;
++	pstSnsState->bSyncInit = CVI_FALSE;
++	pstSnsState->u8ImgMode = IMX577_MODE_12M20;
++	pstSnsState->enWDRMode = WDR_MODE_NONE;
++	pstSnsState->u32FLStd  = g_astImx577_mode[pstSnsState->u8ImgMode].u32VtsDef;
++	pstSnsState->au32FL[0] = g_astImx577_mode[pstSnsState->u8ImgMode].u32VtsDef;
++	pstSnsState->au32FL[1] = g_astImx577_mode[pstSnsState->u8ImgMode].u32VtsDef;
++
++	memset(&pstSnsState->astSyncInfo[0], 0, sizeof(ISP_SNS_SYNC_INFO_S));
++	memset(&pstSnsState->astSyncInfo[1], 0, sizeof(ISP_SNS_SYNC_INFO_S));
++}
++
++static CVI_S32 sensor_rx_attr(VI_PIPE ViPipe, SNS_COMBO_DEV_ATTR_S *pstRxAttr)
++{
++	ISP_SNS_STATE_S *pstSnsState = CVI_NULL;
++	SNS_COMBO_DEV_ATTR_S *pstRxAttrSrc = CVI_NULL;
++
++	IMX577_SENSOR_GET_CTX(ViPipe, pstSnsState);
++	IMX577_SENSOR_GET_COMBO(ViPipe, pstRxAttrSrc);
++	CMOS_CHECK_POINTER(pstSnsState);
++	CMOS_CHECK_POINTER(pstRxAttr);
++	CMOS_CHECK_POINTER(pstRxAttrSrc);
++
++	memcpy(pstRxAttr, pstRxAttrSrc, sizeof(*pstRxAttr));
++
++	pstRxAttr->img_size.width = g_astImx577_mode[pstSnsState->u8ImgMode].astImg[0].stSnsSize.u32Width;
++	pstRxAttr->img_size.height = g_astImx577_mode[pstSnsState->u8ImgMode].astImg[0].stSnsSize.u32Height;
++
++	if (pstSnsState->enWDRMode == WDR_MODE_NONE)
++		pstRxAttr->mipi_attr.wdr_mode = CVI_MIPI_WDR_MODE_NONE;
++
++	return CVI_SUCCESS;
++}
++
++static CVI_S32 sensor_patch_rx_attr(VI_PIPE ViPipe, RX_INIT_ATTR_S *pstRxInitAttr)
++{
++	SNS_COMBO_DEV_ATTR_S* pstRxAttr = CVI_NULL;
++	int i;
++
++	if (!g_pastImx577ComboDevArray[ViPipe]) {
++		pstRxAttr = malloc(sizeof(SNS_COMBO_DEV_ATTR_S));
++	} else {
++		IMX577_SENSOR_GET_COMBO(ViPipe, pstRxAttr);
++	}
++	memcpy(pstRxAttr, &imx577_rx_attr, sizeof(SNS_COMBO_DEV_ATTR_S));
++	IMX577_SENSOR_SET_COMBO(ViPipe, pstRxAttr);
++
++	CMOS_CHECK_POINTER(pstRxInitAttr);
++
++	if (pstRxInitAttr->stMclkAttr.bMclkEn)
++		pstRxAttr->mclk.cam = pstRxInitAttr->stMclkAttr.u8Mclk;
++
++	if (pstRxInitAttr->MipiDev >= VI_MAX_DEV_NUM)
++		return CVI_SUCCESS;
++
++	pstRxAttr->devno = pstRxInitAttr->MipiDev;
++	pstRxAttr->cif_mode = pstRxInitAttr->MipiMode;
++
++	if (pstRxAttr->input_mode == INPUT_MODE_MIPI) {
++		struct mipi_dev_attr_s *attr = &pstRxAttr->mipi_attr;
++		if (ViPipe == 0) {
++			pstRxAttr->mipi_attr.raw_data_type = RAW_DATA_10BIT;
++			pstRxAttr->mac_clk = RX_MAC_CLK_600M;
++		} else if (ViPipe == 1) {
++			pstRxAttr->mipi_attr.raw_data_type = RAW_DATA_10BIT;
++			pstRxAttr->mac_clk = RX_MAC_CLK_600M;
++		}
++		else {
++			pstRxAttr->mipi_attr.raw_data_type = RAW_DATA_10BIT;
++			pstRxAttr->mac_clk = RX_MAC_CLK_150M;
++		}
++		for (i = 0; i < MIPI_LANE_NUM + 1; i++) {
++			attr->lane_id[i] = pstRxInitAttr->as16LaneId[i];
++			attr->pn_swap[i] = pstRxInitAttr->as8PNSwap[i];
++		}
++	} else {
++		struct lvds_dev_attr_s *attr = &pstRxAttr->lvds_attr;
++
++		for (i = 0; i < MIPI_LANE_NUM + 1; i++) {
++			attr->lane_id[i] = pstRxInitAttr->as16LaneId[i];
++			attr->pn_swap[i] = pstRxInitAttr->as8PNSwap[i];
++		}
++	}
++	pstRxAttr = CVI_NULL;
++	return CVI_SUCCESS;
++}
++
++void imx577_exit(VI_PIPE ViPipe)
++{
++	if (g_pastImx577ComboDevArray[ViPipe]) {
++		free(g_pastImx577ComboDevArray[ViPipe]);
++		g_pastImx577ComboDevArray[ViPipe] = CVI_NULL;
++	}
++	imx577_i2c_exit(ViPipe);
++}
++
++static CVI_S32 cmos_init_sensor_exp_function(ISP_SENSOR_EXP_FUNC_S *pstSensorExpFunc)
++{
++	CMOS_CHECK_POINTER(pstSensorExpFunc);
++
++	memset(pstSensorExpFunc, 0, sizeof(ISP_SENSOR_EXP_FUNC_S));
++
++	pstSensorExpFunc->pfn_cmos_sensor_init = imx577_init;
++	pstSensorExpFunc->pfn_cmos_sensor_exit = imx577_exit;
++	pstSensorExpFunc->pfn_cmos_sensor_global_init = sensor_global_init;
++	pstSensorExpFunc->pfn_cmos_set_image_mode = cmos_set_image_mode;
++	pstSensorExpFunc->pfn_cmos_set_wdr_mode = cmos_set_wdr_mode;
++	pstSensorExpFunc->pfn_cmos_get_isp_default = cmos_get_isp_default;
++	pstSensorExpFunc->pfn_cmos_get_isp_black_level = cmos_get_blc_default;
++	pstSensorExpFunc->pfn_cmos_get_sns_reg_info = cmos_get_sns_regs_info;
++	return CVI_SUCCESS;
++}
++
++/****************************************************************************
++ * callback structure                                                       *
++ ****************************************************************************/
++static CVI_VOID sensor_patch_i2c_addr(VI_PIPE ViPipe, CVI_S32 s32I2cAddr)
++{
++	if (IMX577_I2C_ADDR_IS_VALID(s32I2cAddr))
++		g_aunImx577_AddrInfo[ViPipe].s8I2cAddr = s32I2cAddr;
++	else {
++		CVI_TRACE_SNS(CVI_DBG_ERR, "I2C addr input error ,please check [0x%x]\n", s32I2cAddr);
++		g_aunImx577_AddrInfo[ViPipe].s8I2cAddr = IMX577_I2C_ADDR_2;
++	}
++}
++
++static CVI_S32 imx577_set_bus_info(VI_PIPE ViPipe, ISP_SNS_COMMBUS_U unSNSBusInfo)
++{
++	g_aunImx577_BusInfo[ViPipe].s8I2cDev = unSNSBusInfo.s8I2cDev;
++
++	return CVI_SUCCESS;
++}
++
++static CVI_S32 sensor_ctx_init(VI_PIPE ViPipe)
++{
++	ISP_SNS_STATE_S *pastSnsStateCtx = CVI_NULL;
++
++	IMX577_SENSOR_GET_CTX(ViPipe, pastSnsStateCtx);
++
++	if (pastSnsStateCtx == CVI_NULL) {
++		pastSnsStateCtx = (ISP_SNS_STATE_S *)malloc(sizeof(ISP_SNS_STATE_S));
++		if (pastSnsStateCtx == CVI_NULL) {
++			CVI_TRACE_SNS(CVI_DBG_ERR, "Isp[%d] SnsCtx malloc memory failed!\n", ViPipe);
++			return -ENOMEM;
++		}
++	}
++
++	memset(pastSnsStateCtx, 0, sizeof(ISP_SNS_STATE_S));
++
++	IMX577_SENSOR_SET_CTX(ViPipe, pastSnsStateCtx);
++
++	return CVI_SUCCESS;
++}
++
++static CVI_VOID sensor_ctx_exit(VI_PIPE ViPipe)
++{
++	ISP_SNS_STATE_S *pastSnsStateCtx = CVI_NULL;
++
++	IMX577_SENSOR_GET_CTX(ViPipe, pastSnsStateCtx);
++	SENSOR_FREE(pastSnsStateCtx);
++	IMX577_SENSOR_RESET_CTX(ViPipe);
++}
++
++static CVI_S32 sensor_register_callback(VI_PIPE ViPipe, ALG_LIB_S *pstAeLib, ALG_LIB_S *pstAwbLib)
++{
++	CVI_S32 s32Ret;
++	ISP_SENSOR_REGISTER_S stIspRegister;
++	AE_SENSOR_REGISTER_S  stAeRegister;
++	AWB_SENSOR_REGISTER_S stAwbRegister;
++	ISP_SNS_ATTR_INFO_S   stSnsAttrInfo;
++
++	CMOS_CHECK_POINTER(pstAeLib);
++	CMOS_CHECK_POINTER(pstAwbLib);
++
++	s32Ret = sensor_ctx_init(ViPipe);
++
++	if (s32Ret != CVI_SUCCESS)
++		return CVI_FAILURE;
++
++	stSnsAttrInfo.eSensorId = IMX577_ID;
++
++	s32Ret  = cmos_init_sensor_exp_function(&stIspRegister.stSnsExp);
++	s32Ret |= CVI_ISP_SensorRegCallBack(ViPipe, &stSnsAttrInfo, &stIspRegister);
++
++	if (s32Ret != CVI_SUCCESS) {
++		CVI_TRACE_SNS(CVI_DBG_ERR, "sensor register callback function failed!\n");
++		return s32Ret;
++	}
++
++	s32Ret  = cmos_init_ae_exp_function(&stAeRegister.stAeExp);
++	s32Ret |= CVI_AE_SensorRegCallBack(ViPipe, pstAeLib, &stSnsAttrInfo, &stAeRegister);
++
++	if (s32Ret != CVI_SUCCESS) {
++		CVI_TRACE_SNS(CVI_DBG_ERR, "sensor register callback function to ae lib failed!\n");
++		return s32Ret;
++	}
++
++	s32Ret  = cmos_init_awb_exp_function(&stAwbRegister.stAwbExp);
++	s32Ret |= CVI_AWB_SensorRegCallBack(ViPipe, pstAwbLib, &stSnsAttrInfo, &stAwbRegister);
++
++	if (s32Ret != CVI_SUCCESS) {
++		CVI_TRACE_SNS(CVI_DBG_ERR, "sensor register callback function to awb lib failed!\n");
++		return s32Ret;
++	}
++
++	return CVI_SUCCESS;
++}
++
++static CVI_S32 sensor_unregister_callback(VI_PIPE ViPipe, ALG_LIB_S *pstAeLib, ALG_LIB_S *pstAwbLib)
++{
++	CVI_S32 s32Ret;
++
++	CMOS_CHECK_POINTER(pstAeLib);
++	CMOS_CHECK_POINTER(pstAwbLib);
++
++	s32Ret = CVI_ISP_SensorUnRegCallBack(ViPipe, IMX577_ID);
++	if (s32Ret != CVI_SUCCESS) {
++		CVI_TRACE_SNS(CVI_DBG_ERR, "sensor unregister callback function failed!\n");
++		return s32Ret;
++	}
++
++	s32Ret = CVI_AE_SensorUnRegCallBack(ViPipe, pstAeLib, IMX577_ID);
++	if (s32Ret != CVI_SUCCESS) {
++		CVI_TRACE_SNS(CVI_DBG_ERR, "sensor unregister callback function to ae lib failed!\n");
++		return s32Ret;
++	}
++
++	s32Ret = CVI_AWB_SensorUnRegCallBack(ViPipe, pstAwbLib, IMX577_ID);
++	if (s32Ret != CVI_SUCCESS) {
++		CVI_TRACE_SNS(CVI_DBG_ERR, "sensor unregister callback function to awb lib failed!\n");
++		return s32Ret;
++	}
++
++	sensor_ctx_exit(ViPipe);
++
++	return CVI_SUCCESS;
++}
++
++static CVI_S32 sensor_set_init(VI_PIPE ViPipe, ISP_INIT_ATTR_S *pstInitAttr)
++{
++	CMOS_CHECK_POINTER(pstInitAttr);
++
++	g_au32InitExposure[ViPipe] = pstInitAttr->u32Exposure;
++	g_au32LinesPer500ms[ViPipe] = pstInitAttr->u32LinesPer500ms;
++	g_au16InitWBGain[ViPipe][0] = pstInitAttr->u16WBRgain;
++	g_au16InitWBGain[ViPipe][1] = pstInitAttr->u16WBGgain;
++	g_au16InitWBGain[ViPipe][2] = pstInitAttr->u16WBBgain;
++	g_au16SampleRgain[ViPipe] = pstInitAttr->u16SampleRgain;
++	g_au16SampleBgain[ViPipe] = pstInitAttr->u16SampleBgain;
++	g_au16Imx577_GainMode[ViPipe] = pstInitAttr->enGainMode;
++
++	return CVI_SUCCESS;
++}
++
++static CVI_S32 sensor_probe(VI_PIPE ViPipe)
++{
++	return imx577_probe(ViPipe);
++}
++
++ISP_SNS_OBJ_S stSnsImx577_Obj = {
++	.pfnRegisterCallback    = sensor_register_callback,
++	.pfnUnRegisterCallback  = sensor_unregister_callback,
++	.pfnStandby             = imx577_standby,
++	.pfnRestart             = imx577_restart,
++	.pfnMirrorFlip          = sensor_mirror_flip,
++	.pfnWriteReg            = imx577_write_register,
++	.pfnReadReg             = imx577_read_register,
++	.pfnSetBusInfo          = imx577_set_bus_info,
++	.pfnSetInit             = sensor_set_init,
++	.pfnPatchRxAttr		= sensor_patch_rx_attr,
++	.pfnPatchI2cAddr	= sensor_patch_i2c_addr,
++	.pfnGetRxAttr		= sensor_rx_attr,
++	.pfnExpSensorCb		= cmos_init_sensor_exp_function,
++	.pfnExpAeCb		= cmos_init_ae_exp_function,
++	.pfnSnsProbe		= sensor_probe,
++};
++
+diff --git a/v1/component/isp/sensor/cv182x/sony_imx577/imx577_cmos_ex.h b/v1/component/isp/sensor/cv182x/sony_imx577/imx577_cmos_ex.h
+new file mode 100755
+index 000000000..e43a2e339
+--- /dev/null
++++ b/v1/component/isp/sensor/cv182x/sony_imx577/imx577_cmos_ex.h
+@@ -0,0 +1,104 @@
++#ifndef __IMX577_CMOS_EX_H_
++#define __IMX577_CMOS_EX_H_
++
++#ifdef __cplusplus
++#if __cplusplus
++extern "C" {
++#endif
++#endif
++
++#ifdef ARCH_CV182X
++#include <linux/cvi_vip_cif.h>
++#include <linux/cvi_vip_snsr.h>
++#include "cvi_type.h"
++#else
++#include <cvi_comm_cif.h>
++#include <cvi_type.h>
++#endif
++#include "cvi_sns_ctrl.h"
++
++#define IMX577_I2C_ADDR_1 0x1a
++#define IMX577_I2C_ADDR_2 0x10
++
++enum imx577_linear_regs_e {
++	LINEAR_HOLD_START = 0,
++	LINEAR_SHR_L,
++	LINEAR_SHR_H,
++	LINEAR_AGAIN_L,
++	LINEAR_AGAIN_H,
++	LINEAR_DGAIN_L,
++	LINEAR_DGAIN_H,
++	LINEAR_VMAX_L,
++	LINEAR_VMAX_H,
++	LINEAR_HOLD_END,
++	LINEAR_REGS_NUM
++};
++
++enum imx577_wdr_regs_e {
++	WDR_SHR0_L = 0,
++	WDR_SHR0_H,
++	WDR_SHR1_L,
++	WDR_SHR1_H,
++	WDR_GAIN_L,
++	WDR_GAIN_H,
++	WDR_GAIN_SHORT_L,
++	WDR_GAIN_SHORT_H,
++	WDR_VMAX_L,
++	WDR_VMAX_H,
++	WDR_REGS_NUM
++};
++
++typedef enum _IMX577_MODE_E {
++	IMX577_MODE_12M20 = 0,
++	IMX577_MODE_MASTER_12M20,
++	IMX577_MODE_SLAVE_12M20,
++	IMX577_MODE_LINEAR_NUM,
++	IMX577_MODE_12M20_WDR = IMX577_MODE_LINEAR_NUM,
++	IMX577_MODE_NUM
++} IMX577_MODE_E;
++
++typedef struct _IMX577_MODE_S {
++	ISP_WDR_SIZE_S astImg[2];
++	CVI_FLOAT f32MaxFps;
++	CVI_FLOAT f32MinFps;
++	CVI_U32 u32HtsDef;
++	CVI_U32 u32VtsDef;
++	SNS_ATTR_S stExp[2];
++	SNS_ATTR_LARGE_S stAgain[2];
++	SNS_ATTR_LARGE_S stDgain[2];
++	CVI_U16 u16RHS1;
++	CVI_U16 u16BRL;
++	CVI_U16 u16OpbSize;
++	CVI_U16 u16MarginVtop;
++	CVI_U16 u16MarginVbot;
++	char name[64];
++} IMX577_MODE_S;
++
++/****************************************************************************
++ * external variables and functions                                         *
++ ****************************************************************************/
++
++extern ISP_SNS_STATE_S *g_pastImx577[VI_MAX_PIPE_NUM];
++extern ISP_SNS_COMMBUS_U g_aunImx577_BusInfo[];
++extern ISP_SNS_COMMADDR_U g_aunImx577_AddrInfo[];
++extern CVI_U16 g_au16Imx577_GainMode[];
++extern const CVI_U8 imx577_i2c_addr;
++extern const CVI_U32 imx577_addr_byte;
++extern const CVI_U32 imx577_data_byte;
++extern void imx577_init(VI_PIPE ViPipe);
++extern void imx577_exit(VI_PIPE ViPipe);
++extern int imx577_i2c_exit(VI_PIPE ViPipe);
++extern void imx577_standby(VI_PIPE ViPipe);
++extern void imx577_restart(VI_PIPE ViPipe);
++extern int  imx577_write_register(VI_PIPE ViPipe, int addr, int data);
++extern int  imx577_read_register(VI_PIPE ViPipe, int addr);
++extern void imx577_mirror_flip(VI_PIPE ViPipe, ISP_SNS_MIRRORFLIP_TYPE_E eSnsMirrorFlip);
++extern int  imx577_probe(VI_PIPE ViPipe);
++
++#ifdef __cplusplus
++#if __cplusplus
++}
++#endif
++#endif /* End of #ifdef __cplusplus */
++
++#endif /* __IMX577_CMOS_EX_H_ */
+diff --git a/v1/component/isp/sensor/cv182x/sony_imx577/imx577_cmos_param.h b/v1/component/isp/sensor/cv182x/sony_imx577/imx577_cmos_param.h
+new file mode 100755
+index 000000000..c86125f3c
+--- /dev/null
++++ b/v1/component/isp/sensor/cv182x/sony_imx577/imx577_cmos_param.h
+@@ -0,0 +1,383 @@
++#ifndef __IMX577_CMOS_PARAM_H_
++#define __IMX577_CMOS_PARAM_H_
++
++#ifdef __cplusplus
++#if __cplusplus
++extern "C" {
++#endif
++#endif
++
++#ifdef ARCH_CV182X
++#include <linux/cvi_vip_cif.h>
++#include <linux/cvi_vip_snsr.h>
++#include "cvi_type.h"
++#else
++#include <cvi_comm_cif.h>
++#include <cvi_type.h>
++#endif
++#include "cvi_sns_ctrl.h"
++#include "imx577_cmos_ex.h"
++
++static const IMX577_MODE_S g_astImx577_mode[IMX577_MODE_NUM] = {
++	[IMX577_MODE_12M20] = {
++		.name = "12M20_linear",
++		.astImg[0] = {
++			.stSnsSize = {
++				.u32Width = 4056,
++				.u32Height = 3040,
++			},
++			.stWndRect = {
++				.s32X = 0,
++				.s32Y = 0,
++				.u32Width = 4032,
++				.u32Height = 3000,
++			},
++			.stMaxSize = {
++				.u32Width = 4056,
++				.u32Height = 3040,
++			},
++		},
++		.f32MaxFps = 20,
++		.f32MinFps = 1,
++		.u32HtsDef = 0x04c4,
++		.u32VtsDef = 4637,
++		.stExp[0] = {
++			.u16Min = 8,
++			.u16Max = 4637 - 1,
++			.u16Def = 4615,
++			.u16Step = 1,
++		},
++		.stAgain[0] = {
++			.u32Min = 1024,
++			.u32Max = 22528,
++			.u32Def = 1024,
++			.u32Step = 1,
++		},
++		.stDgain[0] = {
++			.u32Min = 1024,
++			.u32Max = 16320,
++			.u32Def = 1024,
++			.u32Step = 1,
++		},
++	},
++	[IMX577_MODE_MASTER_12M20] = {
++		.name = "12M20_master",
++		.astImg[0] = {
++			.stSnsSize = {
++				.u32Width = 4056,
++				.u32Height = 3040,
++			},
++			.stWndRect = {
++				.s32X = 0,
++				.s32Y = 0,
++				.u32Width = 4032,
++				.u32Height = 3000,
++			},
++			.stMaxSize = {
++				.u32Width = 4056,
++				.u32Height = 3040,
++			},
++		},
++		.f32MaxFps = 20,
++		.f32MinFps = 1,
++		.u32HtsDef = 0x04c4,
++		.u32VtsDef = 4637,
++		.stExp[0] = {
++			.u16Min = 8,
++			.u16Max = 4637 - 1,
++			.u16Def = 4615,
++			.u16Step = 1,
++		},
++		.stAgain[0] = {
++			.u32Min = 1024,
++			.u32Max = 22528,
++			.u32Def = 1024,
++			.u32Step = 1,
++		},
++		.stDgain[0] = {
++			.u32Min = 1024,
++			.u32Max = 16320,
++			.u32Def = 1024,
++			.u32Step = 1,
++		},
++	},
++	[IMX577_MODE_SLAVE_12M20] = {
++		.name = "12M20_slave",
++		.astImg[0] = {
++			.stSnsSize = {
++				.u32Width = 4056,
++				.u32Height = 3040,
++			},
++			.stWndRect = {
++				.s32X = 0,
++				.s32Y = 0,
++				.u32Width = 4032,
++				.u32Height = 3000,
++			},
++			.stMaxSize = {
++				.u32Width = 4056,
++				.u32Height = 3040,
++			},
++		},
++		.f32MaxFps = 20,
++		.f32MinFps = 1,
++		.u32HtsDef = 0x04c4,
++		.u32VtsDef = 4637,
++		.stExp[0] = {
++			.u16Min = 8,
++			.u16Max = 4637 - 1,
++			.u16Def = 4615,
++			.u16Step = 1,
++		},
++		.stAgain[0] = {
++			.u32Min = 1024,
++			.u32Max = 22528,
++			.u32Def = 1024,
++			.u32Step = 1,
++		},
++		.stDgain[0] = {
++			.u32Min = 1024,
++			.u32Max = 16320,
++			.u32Def = 1024,
++			.u32Step = 1,
++		},
++	},
++	[IMX577_MODE_12M20_WDR] = {
++		.name = "12M20_WDR",
++		/* sef */
++		.astImg[0] = {
++			.stSnsSize = {
++				.u32Width = 2616,
++				.u32Height = 1964,
++			},
++			.stWndRect = {
++				.s32X = 12,
++				.s32Y = 12,
++				.u32Width = 2592,
++				.u32Height = 1944,
++			},
++			.stMaxSize = {
++				.u32Width = 2616,
++				.u32Height = 1964,
++			},
++		},
++		/* lef */
++		.astImg[1] = {
++			.stSnsSize = {
++				.u32Width = 2616,
++				.u32Height = 1964,
++			},
++			.stWndRect = {
++				.s32X = 12,
++				.s32Y = 12,
++				.u32Width = 2592,
++				.u32Height = 1944,
++			},
++			.stMaxSize = {
++				.u32Width = 2616,
++				.u32Height = 1964,
++			},
++		},
++		.f32MaxFps = 30,
++		.f32MinFps = 0.13, /* 0x1194 * 30 / 0xFFFFF */
++		.u32HtsDef = 0x0898,
++		.u32VtsDef = 0x1194,
++		.stExp[0] = {
++			.u16Min = 8,
++			.u16Max = 481,
++			.u16Def = 8,
++			.u16Step = 1,
++		},
++		.stExp[1] = {
++			.u16Min = 128,
++			.u16Max = 7696,
++			.u16Def = 128,
++			.u16Step = 1,
++		},
++		.stAgain[0] = {
++			.u32Min = 1024,
++			.u32Max = 62416,
++			.u32Def = 1024,
++			.u32Step = 1,
++		},
++		.stAgain[1] = {
++			.u32Min = 1024,
++			.u32Max = 62416,
++			.u32Def = 1024,
++			.u32Step = 1,
++		},
++		.stDgain[0] = {
++			.u32Min = 1024,
++			.u32Max = 38485,
++			.u32Def = 1024,
++			.u32Step = 1,
++		},
++		.stDgain[1] = {
++			.u32Min = 1024,
++			.u32Max = 38485,
++			.u32Def = 1024,
++			.u32Step = 1,
++		},
++		.u16BRL = 3968,
++	},
++};
++
++static ISP_CMOS_NOISE_CALIBRATION_S g_stIspNoiseCalibratio = {.CalibrationCoef = {
++	{	//iso  100
++		{0.02535128779709339142,	1.61768496036529541016}, //B: slope, intercept
++		{0.00795035623013973236,	15.21613883972167968750}, //Gb: slope, intercept
++		{0.01330664381384849548,	10.40423774719238281250}, //Gr: slope, intercept
++		{0.02679967880249023438,	1.82649695873260498047}, //R: slope, intercept
++	},
++	{	//iso  200
++		{0.02753821015357971191,	6.47844934463500976563}, //B: slope, intercept
++		{0.00463790073990821838,	25.24199485778808593750}, //Gb: slope, intercept
++		{0.00451094703748822212,	25.23709869384765625000}, //Gr: slope, intercept
++		{0.02894908934831619263,	6.20713567733764648438}, //R: slope, intercept
++	},
++	{	//iso  400
++		{0.03178063780069351196,	12.60536384582519531250}, //B: slope, intercept
++		{0.00517552718520164490,	35.03299713134765625000}, //Gb: slope, intercept
++		{0.00502182589843869209,	35.23723602294921875000}, //Gr: slope, intercept
++		{0.03328817337751388550,	12.19208049774169921875}, //R: slope, intercept
++	},
++	{	//iso  800
++		{0.03747911751270294189,	21.80648422241210937500}, //B: slope, intercept
++		{0.00625439779832959175,	49.06682205200195312500}, //Gb: slope, intercept
++		{0.00620671268552541733,	49.14254379272460937500}, //Gr: slope, intercept
++		{0.03955777361989021301,	20.63272857666015625000}, //R: slope, intercept
++	},
++	{	//iso  1600
++		{0.04763090237975120544,	34.16785049438476562500}, //B: slope, intercept
++		{0.00715198600664734840,	70.35113525390625000000}, //Gb: slope, intercept
++		{0.00717207882553339005,	70.42241668701171875000}, //Gr: slope, intercept
++		{0.05030791088938713074,	32.31000518798828125000}, //R: slope, intercept
++	},
++	{	//iso  3200
++		{0.06291828304529190063,	51.79273986816406250000}, //B: slope, intercept
++		{0.00942948460578918457,	99.58425903320312500000}, //Gb: slope, intercept
++		{0.00938474666327238083,	99.87895202636718750000}, //Gr: slope, intercept
++		{0.06596329063177108765,	49.59438705444335937500}, //R: slope, intercept
++	},
++	{	//iso  6400
++		{0.08704897761344909668,	76.54403686523437500000}, //B: slope, intercept
++		{0.02136226370930671692,	135.76541137695312500000}, //Gb: slope, intercept
++		{0.02061788551509380341,	136.24209594726562500000}, //Gr: slope, intercept
++		{0.09058564901351928711,	73.56949615478515625000}, //R: slope, intercept
++	},
++	{	//iso  12800
++		{0.11864978075028065820,	116.15978240966796875000}, //B: slope, intercept
++		{0.03285352513194084167,	193.26387023925781250000}, //Gb: slope, intercept
++		{0.03131035342812538147,	194.77830505371093750000}, //Gr: slope, intercept
++		{0.12536112964153289795,	110.30144500732421875000}, //R: slope, intercept
++	},
++	{	//iso  25600
++		{0.16936406493186950684,	172.24114990234375000000}, //B: slope, intercept
++		{0.05775514617562294006,	267.55535888671875000000}, //Gb: slope, intercept
++		{0.05725358799099922180,	268.19198608398437500000}, //Gr: slope, intercept
++		{0.17778857052326202393,	166.38156127929687500000}, //R: slope, intercept
++	},
++	{	//iso  51200
++		{0.23955665528774261475,	255.52276611328125000000}, //B: slope, intercept
++		{0.09076436609029769897,	378.79702758789062500000}, //Gb: slope, intercept
++		{0.08728235960006713867,	384.05020141601562500000}, //Gr: slope, intercept
++		{0.25822344422340393066,	249.06506347656250000000}, //R: slope, intercept
++	},
++	{	//iso  102400
++		{0.36010745167732238770,	362.82952880859375000000}, //B: slope, intercept
++		{0.15752448141574859619,	513.11077880859375000000}, //Gb: slope, intercept
++		{0.15595595538616180420,	518.77105712890625000000}, //Gr: slope, intercept
++		{0.38190475106239318848,	360.52606201171875000000}, //R: slope, intercept
++	},
++	{	//iso  204800
++		{0.44082218408584594727,	536.35937500000000000000}, //B: slope, intercept
++		{0.22994761168956756592,	701.87817382812500000000}, //Gb: slope, intercept
++		{0.22570468485355377197,	707.03558349609375000000}, //Gr: slope, intercept
++		{0.46145606040954589844,	543.70227050781250000000}, //R: slope, intercept
++	},
++	{	//iso  409600
++		{0.24378113448619842529,	865.24688720703125000000}, //B: slope, intercept
++		{0.06541594862937927246,	1050.97998046875000000000}, //Gb: slope, intercept
++		{0.06018084660172462463,	1068.13745117187500000000}, //Gr: slope, intercept
++		{0.25154441595077514648,	904.18511962890625000000}, //R: slope, intercept
++	},
++	{	//iso  819200
++		{0.24305926263332366943,	867.16644287109375000000}, //B: slope, intercept
++		{0.06559922546148300171,	1050.18383789062500000000}, //Gb: slope, intercept
++		{0.06018084660172462463,	1068.13745117187500000000}, //Gr: slope, intercept
++		{0.25154441595077514648,	904.18511962890625000000}, //R: slope, intercept
++	},
++	{	//iso  1638400
++		{0.24378113448619842529,	865.24688720703125000000}, //B: slope, intercept
++		{0.06582942605018615723,	1048.96228027343750000000}, //Gb: slope, intercept
++		{0.06089610978960990906,	1064.75537109375000000000}, //Gr: slope, intercept
++		{0.25244551897048950195,	901.38049316406250000000}, //R: slope, intercept
++	},
++	{	//iso  3276800
++		{0.24428291618824005127,	863.30468750000000000000}, //B: slope, intercept
++		{0.06582942605018615723,	1048.96228027343750000000}, //Gb: slope, intercept
++		{0.06080029532313346863,	1065.15185546875000000000}, //Gr: slope, intercept
++		{0.25226309895515441895,	901.83532714843750000000}, //R: slope, intercept
++	},
++} };
++
++static ISP_CMOS_BLACK_LEVEL_S g_stIspBlcCalibratio = {
++	.bUpdate = CVI_TRUE,
++	.blcAttr = {
++		.Enable = 1,
++		.enOpType = OP_TYPE_AUTO,
++		.stManual = {280, 280, 280, 280, 0, 0, 0, 0
++#ifdef ARCH_CV182X
++			, 1076, 1076, 1076, 1076
++#endif
++		},
++		.stAuto = {
++			{280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280},
++			{280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280},
++			{280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280},
++			{280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280, 280},
++			{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
++			{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
++			{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
++			{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
++#ifdef ARCH_CV182X
++			{1076, 1077, 1077, 1077, 1077, 1077, 1077, 1078,
++				/*8*/1082, 1096, 1138, 1228, 1365, 1365, 1365, 1365},
++			{1077, 1077, 1077, 1077, 1077, 1076, 1076, 1076,
++				/*8*/1077, 1088, 1122, 1196, 1344, 1344, 1347, 1347},
++			{1077, 1077, 1077, 1077, 1077, 1077, 1077, 1076,
++				/*8*/1078, 1090, 1126, 1203, 1358, 1359, 1360, 1360},
++			{1076, 1077, 1077, 1077, 1077, 1077, 1077, 1079,
++				/*8*/1082, 1096, 1137, 1226, 1365, 1365, 1365, 1365},
++#endif
++		},
++	},
++};
++
++struct combo_dev_attr_s imx577_rx_attr = {
++	.input_mode = INPUT_MODE_MIPI,
++	.mac_clk = RX_MAC_CLK_900M,
++	.mipi_attr = {
++		.raw_data_type = RAW_DATA_10BIT,
++		.lane_id = {0, 3, 2, 4, 1, -1, -1, -1, -1},
++		.pn_swap = {0, 0, 0, 0, 0, 0, 0, 0, 0},
++		.wdr_mode = CVI_MIPI_WDR_MODE_NONE,
++		.dphy = {
++			.enable = 1,
++			.hs_settle = 12,
++		},
++	},
++	.mclk = {
++		.cam = 0,
++		.freq = CAMPLL_FREQ_27M,
++	},
++	.devno = 0,
++};
++
++#ifdef __cplusplus
++#if __cplusplus
++}
++#endif
++#endif /* End of #ifdef __cplusplus */
++
++#endif /* __IMX577_CMOS_PARAM_H_ */
+diff --git a/v1/component/isp/sensor/cv182x/sony_imx577/imx577_sensor_ctl.c b/v1/component/isp/sensor/cv182x/sony_imx577/imx577_sensor_ctl.c
+new file mode 100755
+index 000000000..e023ae9e6
+--- /dev/null
++++ b/v1/component/isp/sensor/cv182x/sony_imx577/imx577_sensor_ctl.c
+@@ -0,0 +1,1270 @@
++#include <stdio.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <sys/ioctl.h>
++#include <syslog.h>
++#include <fcntl.h>
++#include <unistd.h>
++#include <linux/i2c.h>
++#include <linux/i2c-dev.h>
++#ifdef ARCH_CV182X
++#include <linux/cvi_vip_snsr.h>
++#include "cvi_comm_video.h"
++#else
++#include <cvi_comm_video.h>
++#endif
++#include "cvi_sns_ctrl.h"
++#include "imx577_cmos_ex.h"
++
++
++#define IMX577_CHIP_ID_ADDR_H 	0x0a24
++#define IMX577_CHIP_ID_ADDR_L	0x0a25
++#define IMX577_CHIP_ID			0x577
++#define IMX577_ORIEN_ADDR		0x0101
++
++
++static void imx577_linear_12m20_init(VI_PIPE ViPipe);
++static void imx577_linear_slave_12m20_init(VI_PIPE ViPipe);
++static void imx577_linear_master_12m20_init(VI_PIPE ViPipe);
++static void imx577_wdr_12m20_2to1_init(VI_PIPE ViPipe);
++
++const CVI_U32 imx577_addr_byte = 2;
++const CVI_U32 imx577_data_byte = 1;
++static int g_fd[VI_MAX_PIPE_NUM] = {[0 ... (VI_MAX_PIPE_NUM - 1)] = -1};
++ISP_SNS_MIRRORFLIP_TYPE_E g_aeImx577_MirrorFip_Initial[VI_MAX_PIPE_NUM] = {
++	ISP_SNS_MIRROR, ISP_SNS_MIRROR, ISP_SNS_MIRROR, ISP_SNS_MIRROR};
++
++int imx577_i2c_init(VI_PIPE ViPipe)
++{
++	char acDevFile[16] = {0};
++	CVI_U8 u8DevNum;
++
++	if (g_fd[ViPipe] >= 0)
++		return CVI_SUCCESS;
++	int ret;
++
++	u8DevNum = g_aunImx577_BusInfo[ViPipe].s8I2cDev;
++	snprintf(acDevFile, sizeof(acDevFile),  "/dev/i2c-%u", u8DevNum);
++
++	g_fd[ViPipe] = open(acDevFile, O_RDWR, 0600);
++
++	if (g_fd[ViPipe] < 0) {
++		CVI_TRACE_SNS(CVI_DBG_ERR, "Open /dev/i2c-%u error!\n", u8DevNum);
++		return CVI_FAILURE;
++	}
++
++	ret = ioctl(g_fd[ViPipe], I2C_SLAVE_FORCE, g_aunImx577_AddrInfo[ViPipe].s8I2cAddr);
++	if (ret < 0) {
++		CVI_TRACE_SNS(CVI_DBG_ERR, "I2C_SLAVE_FORCE error!\n");
++		close(g_fd[ViPipe]);
++		g_fd[ViPipe] = -1;
++		return ret;
++	}
++
++	return CVI_SUCCESS;
++}
++
++int imx577_i2c_exit(VI_PIPE ViPipe)
++{
++	if (g_fd[ViPipe] >= 0) {
++		close(g_fd[ViPipe]);
++		g_fd[ViPipe] = -1;
++		return CVI_SUCCESS;
++	}
++	return CVI_FAILURE;
++}
++
++int imx577_read_register(VI_PIPE ViPipe, int addr)
++{
++	int ret, data;
++	CVI_U8 buf[8];
++	CVI_U8 idx = 0;
++
++	if (g_fd[ViPipe] < 0)
++		return CVI_FAILURE;
++
++	if (imx577_addr_byte == 2)
++		buf[idx++] = (addr >> 8) & 0xff;
++
++	// add address byte 0
++	buf[idx++] = addr & 0xff;
++
++	ret = write(g_fd[ViPipe], buf, imx577_addr_byte);
++	if (ret < 0) {
++		CVI_TRACE_SNS(CVI_DBG_ERR, "I2C_WRITE error!\n");
++		return ret;
++	}
++
++	buf[0] = 0;
++	buf[1] = 0;
++	ret = read(g_fd[ViPipe], buf, imx577_data_byte);
++	if (ret < 0) {
++		CVI_TRACE_SNS(CVI_DBG_ERR, "I2C_READ error!\n");
++		return ret;
++	}
++
++	// pack read back data
++	data = 0;
++	if (imx577_data_byte == 2) {
++		data = buf[0] << 8;
++		data += buf[1];
++	} else {
++		data = buf[0];
++	}
++
++	syslog(LOG_DEBUG, "i2c r 0x%x = 0x%x\n", addr, data);
++	return data;
++}
++
++
++int imx577_write_register(VI_PIPE ViPipe, int addr, int data)
++{
++	CVI_U8 idx = 0;
++	int ret;
++	CVI_U8 buf[8];
++
++	if (g_fd[ViPipe] < 0)
++		return CVI_SUCCESS;
++
++	if (imx577_addr_byte == 2) {
++		buf[idx] = (addr >> 8) & 0xff;
++		idx++;
++		buf[idx] = addr & 0xff;
++		idx++;
++	}
++
++	if (imx577_data_byte == 1) {
++		buf[idx] = data & 0xff;
++		idx++;
++	}
++
++	ret = write(g_fd[ViPipe], buf, imx577_addr_byte + imx577_data_byte);
++	if (ret < 0) {
++		CVI_TRACE_SNS(CVI_DBG_ERR, "I2C_WRITE 0x%x error!\n", addr);
++		return CVI_FAILURE;
++	}
++	syslog(LOG_DEBUG, "i2c w 0x%x 0x%x\n", addr, data);
++	return CVI_SUCCESS;
++}
++
++static void delay_ms(int ms)
++{
++	usleep(ms * 1000);
++}
++
++void imx577_standby(VI_PIPE ViPipe)
++{
++	(void)(ViPipe);
++}
++
++void imx577_restart(VI_PIPE ViPipe)
++{
++	(void)(ViPipe);
++	delay_ms(20);
++}
++
++void imx577_default_reg_init(VI_PIPE ViPipe)
++{
++	CVI_U32 i;
++	return;
++	for (i = 0; i < g_pastImx577[ViPipe]->astSyncInfo[0].snsCfg.u32RegNum; i++) {
++	imx577_write_register(ViPipe,
++				g_pastImx577[ViPipe]->astSyncInfo[0].snsCfg.astI2cData[i].u32RegAddr,
++				g_pastImx577[ViPipe]->astSyncInfo[0].snsCfg.astI2cData[i].u32Data);
++	}
++}
++
++
++void imx577_mirror_flip(VI_PIPE ViPipe, ISP_SNS_MIRRORFLIP_TYPE_E eSnsMirrorFlip)
++{
++	CVI_U8 val = 0;
++
++	val = imx577_read_register(ViPipe, IMX577_ORIEN_ADDR);
++	val &= ~0x3;
++
++	switch (eSnsMirrorFlip) {
++	case ISP_SNS_NORMAL:
++		break;
++	case ISP_SNS_MIRROR:
++		val |= 0x1;
++		break;
++	case ISP_SNS_FLIP:
++		val |= 0x1<<1;
++		break;
++	case ISP_SNS_MIRROR_FLIP:
++		val |= 0x1;
++		val |= 0x1<<1;
++		break;
++	default:
++		return;
++	}
++
++
++	imx577_standby(ViPipe);
++	imx577_write_register(ViPipe, IMX577_ORIEN_ADDR, val);
++	usleep(1000*100);
++	imx577_restart(ViPipe);
++}
++
++int imx577_probe(VI_PIPE ViPipe)
++{
++	int nVal_h, nVal_l;
++
++	usleep(100);
++	if (imx577_i2c_init(ViPipe) != CVI_SUCCESS)
++		return CVI_FAILURE;
++
++	imx577_write_register(ViPipe, 0x0a02, 0x1f);
++	imx577_write_register(ViPipe, 0x0a00, 0x1);
++	nVal_h = imx577_read_register(ViPipe, IMX577_CHIP_ID_ADDR_H);
++	nVal_l = imx577_read_register(ViPipe, IMX577_CHIP_ID_ADDR_L);
++
++	if (nVal_h < 0 || nVal_l < 0) {
++		CVI_TRACE_SNS(CVI_DBG_ERR, "read sensor id error.\n");
++		return nVal_h;
++	}
++
++	if ((((nVal_h & 0xff) << 4) | ((nVal_l & 0xf0) >> 4)) != IMX577_CHIP_ID) {
++		CVI_TRACE_SNS(CVI_DBG_ERR, "Sensor ID Mismatch! Use the wrong sensor??\n");
++		return CVI_FAILURE;
++	}
++
++	return CVI_SUCCESS;
++}
++
++void imx577_init(VI_PIPE ViPipe)
++{
++	WDR_MODE_E        enWDRMode;
++	CVI_U8            u8ImgMode;
++
++	enWDRMode   = g_pastImx577[ViPipe]->enWDRMode;
++	u8ImgMode   = g_pastImx577[ViPipe]->u8ImgMode;
++
++	imx577_i2c_init(ViPipe);
++
++	if (enWDRMode == WDR_MODE_2To1_LINE) {
++		if (u8ImgMode == IMX577_MODE_12M20_WDR)
++			imx577_wdr_12m20_2to1_init(ViPipe);
++		else{
++		}
++	} else {
++		if (u8ImgMode == IMX577_MODE_12M20) {
++			imx577_linear_12m20_init(ViPipe);
++		}
++		else if (u8ImgMode == IMX577_MODE_MASTER_12M20) {
++			imx577_linear_master_12m20_init(ViPipe);
++		} else if (u8ImgMode == IMX577_MODE_SLAVE_12M20) {
++			imx577_linear_slave_12m20_init(ViPipe);
++		}
++	}
++	g_pastImx577[ViPipe]->bInit = CVI_TRUE;
++}
++
++// void imx577_exit(VI_PIPE ViPipe)
++// {
++// 	imx577_i2c_exit(ViPipe);
++// }
++
++static void imx577_linear_master_12m20_init(VI_PIPE ViPipe)
++{
++	delay_ms(40);
++
++	// 27M 4056x3040@25 10bit
++
++
++	imx577_write_register(ViPipe, 0x0136, 0x1B);
++	imx577_write_register(ViPipe, 0x0137, 0x00);
++
++	imx577_write_register(ViPipe, 0x3C7E, 0x01);
++	imx577_write_register(ViPipe, 0x3C7F, 0x02);
++
++	imx577_write_register(ViPipe, 0x4b81, 0x01);
++	imx577_write_register(ViPipe, 0x3040, 0x01); //XVS IO CTRL 1:MASTER 0:SLAVE
++	imx577_write_register(ViPipe, 0x3041, 0x01); //MASTER MODE
++
++	imx577_write_register(ViPipe, 0x38A8, 0x1F);
++	imx577_write_register(ViPipe, 0x38A9, 0xFF);
++	imx577_write_register(ViPipe, 0x38AA, 0x1F);
++	imx577_write_register(ViPipe, 0x38AB, 0xFF);
++	imx577_write_register(ViPipe, 0x55D4, 0x00);
++	imx577_write_register(ViPipe, 0x55D5, 0x00);
++	imx577_write_register(ViPipe, 0x55D6, 0x07);
++	imx577_write_register(ViPipe, 0x55D7, 0xFF);
++	imx577_write_register(ViPipe, 0x55E8, 0x07);
++	imx577_write_register(ViPipe, 0x55E9, 0xFF);
++	imx577_write_register(ViPipe, 0x55EA, 0x00);
++	imx577_write_register(ViPipe, 0x55EB, 0x00);
++	imx577_write_register(ViPipe, 0x575C, 0x07);
++	imx577_write_register(ViPipe, 0x575D, 0xFF);
++	imx577_write_register(ViPipe, 0x575E, 0x00);
++	imx577_write_register(ViPipe, 0x575F, 0x00);
++	imx577_write_register(ViPipe, 0x5764, 0x00);
++	imx577_write_register(ViPipe, 0x5765, 0x00);
++	imx577_write_register(ViPipe, 0x5766, 0x07);
++	imx577_write_register(ViPipe, 0x5767, 0xFF);
++	imx577_write_register(ViPipe, 0x5974, 0x04);
++	imx577_write_register(ViPipe, 0x5975, 0x01);
++	imx577_write_register(ViPipe, 0x5F10, 0x09);
++	imx577_write_register(ViPipe, 0x5F11, 0x92);
++	imx577_write_register(ViPipe, 0x5F12, 0x32);
++	imx577_write_register(ViPipe, 0x5F13, 0x72);
++	imx577_write_register(ViPipe, 0x5F14, 0x16);
++	imx577_write_register(ViPipe, 0x5F15, 0xBA);
++	imx577_write_register(ViPipe, 0x5F17, 0x13);
++	imx577_write_register(ViPipe, 0x5F18, 0x24);
++	imx577_write_register(ViPipe, 0x5F19, 0x60);
++	imx577_write_register(ViPipe, 0x5F1A, 0xE3);
++	imx577_write_register(ViPipe, 0x5F1B, 0xAD);
++	imx577_write_register(ViPipe, 0x5F1C, 0x74);
++	imx577_write_register(ViPipe, 0x5F2D, 0x25);
++	imx577_write_register(ViPipe, 0x5F5C, 0xD0);
++	imx577_write_register(ViPipe, 0x6A22, 0x00);
++	imx577_write_register(ViPipe, 0x6A23, 0x1D);
++	imx577_write_register(ViPipe, 0x7BA8, 0x00);
++	imx577_write_register(ViPipe, 0x7BA9, 0x00);
++	imx577_write_register(ViPipe, 0x886B, 0x00);
++	imx577_write_register(ViPipe, 0x9002, 0x0A);
++	imx577_write_register(ViPipe, 0x9004, 0x1A);
++	imx577_write_register(ViPipe, 0x9214, 0x93);
++	imx577_write_register(ViPipe, 0x9215, 0x69);
++	imx577_write_register(ViPipe, 0x9216, 0x93);
++	imx577_write_register(ViPipe, 0x9217, 0x6B);
++	imx577_write_register(ViPipe, 0x9218, 0x93);
++	imx577_write_register(ViPipe, 0x9219, 0x6D);
++	imx577_write_register(ViPipe, 0x921A, 0x57);
++	imx577_write_register(ViPipe, 0x921B, 0x58);
++	imx577_write_register(ViPipe, 0x921C, 0x57);
++	imx577_write_register(ViPipe, 0x921D, 0x59);
++	imx577_write_register(ViPipe, 0x921E, 0x57);
++	imx577_write_register(ViPipe, 0x921F, 0x5A);
++	imx577_write_register(ViPipe, 0x9220, 0x57);
++	imx577_write_register(ViPipe, 0x9221, 0x5B);
++	imx577_write_register(ViPipe, 0x9222, 0x93);
++	imx577_write_register(ViPipe, 0x9223, 0x02);
++	imx577_write_register(ViPipe, 0x9224, 0x93);
++	imx577_write_register(ViPipe, 0x9225, 0x03);
++	imx577_write_register(ViPipe, 0x9226, 0x93);
++	imx577_write_register(ViPipe, 0x9227, 0x04);
++	imx577_write_register(ViPipe, 0x9228, 0x93);
++	imx577_write_register(ViPipe, 0x9229, 0x05);
++	imx577_write_register(ViPipe, 0x922A, 0x98);
++	imx577_write_register(ViPipe, 0x922B, 0x21);
++	imx577_write_register(ViPipe, 0x922C, 0xB2);
++	imx577_write_register(ViPipe, 0x922D, 0xDB);
++	imx577_write_register(ViPipe, 0x922E, 0xB2);
++	imx577_write_register(ViPipe, 0x922F, 0xDC);
++	imx577_write_register(ViPipe, 0x9230, 0xB2);
++	imx577_write_register(ViPipe, 0x9231, 0xDD);
++	imx577_write_register(ViPipe, 0x9232, 0xB2);
++	imx577_write_register(ViPipe, 0x9233, 0xE1);
++	imx577_write_register(ViPipe, 0x9234, 0xB2);
++	imx577_write_register(ViPipe, 0x9235, 0xE2);
++	imx577_write_register(ViPipe, 0x9236, 0xB2);
++	imx577_write_register(ViPipe, 0x9237, 0xE3);
++	imx577_write_register(ViPipe, 0x9238, 0xB7);
++	imx577_write_register(ViPipe, 0x9239, 0xB9);
++	imx577_write_register(ViPipe, 0x923A, 0xB7);
++	imx577_write_register(ViPipe, 0x923B, 0xBB);
++	imx577_write_register(ViPipe, 0x923C, 0xB7);
++	imx577_write_register(ViPipe, 0x923D, 0xBC);
++	imx577_write_register(ViPipe, 0x923E, 0xB7);
++	imx577_write_register(ViPipe, 0x923F, 0xC5);
++	imx577_write_register(ViPipe, 0x9240, 0xB7);
++	imx577_write_register(ViPipe, 0x9241, 0xC7);
++	imx577_write_register(ViPipe, 0x9242, 0xB7);
++	imx577_write_register(ViPipe, 0x9243, 0xC9);
++	imx577_write_register(ViPipe, 0x9244, 0x98);
++	imx577_write_register(ViPipe, 0x9245, 0x56);
++	imx577_write_register(ViPipe, 0x9246, 0x98);
++	imx577_write_register(ViPipe, 0x9247, 0x55);
++	imx577_write_register(ViPipe, 0x9380, 0x00);
++	imx577_write_register(ViPipe, 0x9381, 0x62);
++	imx577_write_register(ViPipe, 0x9382, 0x00);
++	imx577_write_register(ViPipe, 0x9383, 0x56);
++	imx577_write_register(ViPipe, 0x9384, 0x00);
++	imx577_write_register(ViPipe, 0x9385, 0x52);
++	imx577_write_register(ViPipe, 0x9388, 0x00);
++	imx577_write_register(ViPipe, 0x9389, 0x55);
++	imx577_write_register(ViPipe, 0x938A, 0x00);
++	imx577_write_register(ViPipe, 0x938B, 0x55);
++	imx577_write_register(ViPipe, 0x938C, 0x00);
++	imx577_write_register(ViPipe, 0x938D, 0x41);
++	imx577_write_register(ViPipe, 0x5078, 0x01);
++
++
++	imx577_write_register(ViPipe, 0x9827, 0x20);
++	imx577_write_register(ViPipe, 0x9830, 0x0A);
++	imx577_write_register(ViPipe, 0x9833, 0x0A);
++	imx577_write_register(ViPipe, 0x9834, 0x32);
++	imx577_write_register(ViPipe, 0x9837, 0x22);
++	imx577_write_register(ViPipe, 0x983C, 0x04);
++	imx577_write_register(ViPipe, 0x983F, 0x0A);
++	imx577_write_register(ViPipe, 0x994F, 0x00);
++	imx577_write_register(ViPipe, 0x9A48, 0x06);
++	imx577_write_register(ViPipe, 0x9A49, 0x06);
++	imx577_write_register(ViPipe, 0x9A4A, 0x06);
++	imx577_write_register(ViPipe, 0x9A4B, 0x06);
++	imx577_write_register(ViPipe, 0x9A4E, 0x03);
++	imx577_write_register(ViPipe, 0x9A4F, 0x03);
++	imx577_write_register(ViPipe, 0x9A54, 0x03);
++	imx577_write_register(ViPipe, 0x9A66, 0x03);
++	imx577_write_register(ViPipe, 0x9A67, 0x03);
++	imx577_write_register(ViPipe, 0xA2C9, 0x02);
++	imx577_write_register(ViPipe, 0xA2CB, 0x02);
++	imx577_write_register(ViPipe, 0xA2CD, 0x02);
++	imx577_write_register(ViPipe, 0xB249, 0x3F);
++	imx577_write_register(ViPipe, 0xB24F, 0x3F);
++	imx577_write_register(ViPipe, 0xB290, 0x3F);
++	imx577_write_register(ViPipe, 0xB293, 0x3F);
++	imx577_write_register(ViPipe, 0xB296, 0x3F);
++	imx577_write_register(ViPipe, 0xB299, 0x3F);
++	imx577_write_register(ViPipe, 0xB2A2, 0x3F);
++	imx577_write_register(ViPipe, 0xB2A8, 0x3F);
++	imx577_write_register(ViPipe, 0xB2A9, 0x0D);
++	imx577_write_register(ViPipe, 0xB2AA, 0x0D);
++	imx577_write_register(ViPipe, 0xB2AB, 0x3F);
++	imx577_write_register(ViPipe, 0xB2BA, 0x2F);
++	imx577_write_register(ViPipe, 0xB2BB, 0x2F);
++	imx577_write_register(ViPipe, 0xB2BC, 0x2F);
++	imx577_write_register(ViPipe, 0xB2BD, 0x10);
++	imx577_write_register(ViPipe, 0xB2C0, 0x3F);
++	imx577_write_register(ViPipe, 0xB2C3, 0x3F);
++	imx577_write_register(ViPipe, 0xB2D2, 0x3F);
++	imx577_write_register(ViPipe, 0xB2DE, 0x20);
++	imx577_write_register(ViPipe, 0xB2DF, 0x20);
++	imx577_write_register(ViPipe, 0xB2E0, 0x20);
++	imx577_write_register(ViPipe, 0xB2EA, 0x3F);
++	imx577_write_register(ViPipe, 0xB2ED, 0x3F);
++	imx577_write_register(ViPipe, 0xB2EE, 0x3F);
++	imx577_write_register(ViPipe, 0xB2EF, 0x3F);
++	imx577_write_register(ViPipe, 0xB2F0, 0x2F);
++	imx577_write_register(ViPipe, 0xB2F1, 0x2F);
++	imx577_write_register(ViPipe, 0xB2F2, 0x2F);
++	imx577_write_register(ViPipe, 0xB2F9, 0x0E);
++	imx577_write_register(ViPipe, 0xB2FA, 0x0E);
++	imx577_write_register(ViPipe, 0xB2FB, 0x0E);
++	imx577_write_register(ViPipe, 0xB759, 0x01);
++	imx577_write_register(ViPipe, 0xB765, 0x3F);
++	imx577_write_register(ViPipe, 0xB76B, 0x3F);
++	imx577_write_register(ViPipe, 0xB7B3, 0x03);
++	imx577_write_register(ViPipe, 0xB7B5, 0x03);
++	imx577_write_register(ViPipe, 0xB7B7, 0x03);
++	imx577_write_register(ViPipe, 0xB7BF, 0x03);
++	imx577_write_register(ViPipe, 0xB7C1, 0x03);
++	imx577_write_register(ViPipe, 0xB7C3, 0x03);
++	imx577_write_register(ViPipe, 0xB7EF, 0x02);
++	imx577_write_register(ViPipe, 0xB7F5, 0x1F);
++	imx577_write_register(ViPipe, 0xB7F7, 0x1F);
++	imx577_write_register(ViPipe, 0xB7F9, 0x1F);
++
++	imx577_write_register(ViPipe, 0x0112, 0x0A);
++	imx577_write_register(ViPipe, 0x0113, 0x0A);
++	imx577_write_register(ViPipe, 0x0114, 0x03);
++
++	imx577_write_register(ViPipe, 0x0342, 0x11);
++	imx577_write_register(ViPipe, 0x0343, 0xA0);
++
++	imx577_write_register(ViPipe, 0x0340, 0x12);
++	imx577_write_register(ViPipe, 0x0341, 0x1D);
++	imx577_write_register(ViPipe, 0x3210, 0x00);
++
++	imx577_write_register(ViPipe, 0x0344, 0x00);
++	imx577_write_register(ViPipe, 0x0345, 0x00);
++	imx577_write_register(ViPipe, 0x0346, 0x00);
++	imx577_write_register(ViPipe, 0x0347, 0x00);
++	imx577_write_register(ViPipe, 0x0348, 0x0F);
++	imx577_write_register(ViPipe, 0x0349, 0xD7);
++	imx577_write_register(ViPipe, 0x034A, 0x0B);
++	imx577_write_register(ViPipe, 0x034B, 0xDF);
++
++	imx577_write_register(ViPipe, 0x00E3, 0x00);
++	imx577_write_register(ViPipe, 0x00E4, 0x00);
++	imx577_write_register(ViPipe, 0x00E5, 0x01);
++	imx577_write_register(ViPipe, 0x00FC, 0x0A);
++	imx577_write_register(ViPipe, 0x00FD, 0x0A);
++	imx577_write_register(ViPipe, 0x00FE, 0x0A);
++	imx577_write_register(ViPipe, 0x00FF, 0x0A);
++	imx577_write_register(ViPipe, 0xE013, 0x00);
++	imx577_write_register(ViPipe, 0x0220, 0x00);
++	imx577_write_register(ViPipe, 0x0221, 0x11);
++	imx577_write_register(ViPipe, 0x0381, 0x01);
++	imx577_write_register(ViPipe, 0x0383, 0x01);
++	imx577_write_register(ViPipe, 0x0385, 0x01);
++	imx577_write_register(ViPipe, 0x0387, 0x01);
++	imx577_write_register(ViPipe, 0x0900, 0x00);
++	imx577_write_register(ViPipe, 0x0901, 0x11);
++	imx577_write_register(ViPipe, 0x0902, 0x00);
++	imx577_write_register(ViPipe, 0x3140, 0x02);
++	imx577_write_register(ViPipe, 0x3241, 0x11);
++	imx577_write_register(ViPipe, 0x3250, 0x03);
++	imx577_write_register(ViPipe, 0x3E10, 0x00);
++	imx577_write_register(ViPipe, 0x3E11, 0x00);
++	imx577_write_register(ViPipe, 0x3F0D, 0x00);
++	imx577_write_register(ViPipe, 0x3F42, 0x00);
++	imx577_write_register(ViPipe, 0x3F43, 0x00);
++
++	imx577_write_register(ViPipe, 0x0401, 0x00);
++	imx577_write_register(ViPipe, 0x0404, 0x00);
++	imx577_write_register(ViPipe, 0x0405, 0x10);
++	imx577_write_register(ViPipe, 0x0408, 0x00);
++	imx577_write_register(ViPipe, 0x0409, 0x00);
++	imx577_write_register(ViPipe, 0x040A, 0x00);
++	imx577_write_register(ViPipe, 0x040B, 0x00);
++	imx577_write_register(ViPipe, 0x040C, 0x0F);
++	imx577_write_register(ViPipe, 0x040D, 0xD8);
++	imx577_write_register(ViPipe, 0x040E, 0x0B);
++	imx577_write_register(ViPipe, 0x040F, 0xE0);
++
++	imx577_write_register(ViPipe, 0x034C, 0x0F);
++	imx577_write_register(ViPipe, 0x034D, 0xD8);
++	imx577_write_register(ViPipe, 0x034E, 0x0B);
++	imx577_write_register(ViPipe, 0x034F, 0xE0);
++
++	imx577_write_register(ViPipe, 0x0301, 0x05);
++	imx577_write_register(ViPipe, 0x0303, 0x04);
++	imx577_write_register(ViPipe, 0x0305, 0x04);
++	imx577_write_register(ViPipe, 0x0306, 0x01);
++	imx577_write_register(ViPipe, 0x0307, 0x36);
++	imx577_write_register(ViPipe, 0x0309, 0x0A);
++	imx577_write_register(ViPipe, 0x030B, 0x01);
++	imx577_write_register(ViPipe, 0x030D, 0x03);
++	imx577_write_register(ViPipe, 0x030E, 0x00);
++	imx577_write_register(ViPipe, 0x030F, 0xA1);
++	imx577_write_register(ViPipe, 0x0310, 0x01);
++	imx577_write_register(ViPipe, 0x0820, 0x16);
++	imx577_write_register(ViPipe, 0x0821, 0xA4);
++	imx577_write_register(ViPipe, 0x0822, 0x00);
++	imx577_write_register(ViPipe, 0x0823, 0x00);
++
++	imx577_write_register(ViPipe, 0x3E20, 0x01);
++	imx577_write_register(ViPipe, 0x3E37, 0x00);
++
++	imx577_write_register(ViPipe, 0x3F50, 0x00);
++	imx577_write_register(ViPipe, 0x3F56, 0x01);
++	imx577_write_register(ViPipe, 0x3F57, 0x24);
++
++	imx577_write_register(ViPipe, 0x3C0A, 0x5A);
++	imx577_write_register(ViPipe, 0x3C0B, 0x55);
++	imx577_write_register(ViPipe, 0x3C0C, 0x28);
++	imx577_write_register(ViPipe, 0x3C0D, 0x07);
++	imx577_write_register(ViPipe, 0x3C0E, 0xFF);
++	imx577_write_register(ViPipe, 0x3C0F, 0x00);
++	imx577_write_register(ViPipe, 0x3C10, 0x00);
++	imx577_write_register(ViPipe, 0x3C11, 0x02);
++	imx577_write_register(ViPipe, 0x3C12, 0x00);
++	imx577_write_register(ViPipe, 0x3C13, 0x03);
++	imx577_write_register(ViPipe, 0x3C14, 0x00);
++	imx577_write_register(ViPipe, 0x3C15, 0x00);
++	imx577_write_register(ViPipe, 0x3C16, 0x0C);
++	imx577_write_register(ViPipe, 0x3C17, 0x0C);
++	imx577_write_register(ViPipe, 0x3C18, 0x0C);
++	imx577_write_register(ViPipe, 0x3C19, 0x0A);
++	imx577_write_register(ViPipe, 0x3C1A, 0x0A);
++	imx577_write_register(ViPipe, 0x3C1B, 0x0A);
++	imx577_write_register(ViPipe, 0x3C1C, 0x00);
++	imx577_write_register(ViPipe, 0x3C1D, 0x00);
++	imx577_write_register(ViPipe, 0x3C1E, 0x00);
++	imx577_write_register(ViPipe, 0x3C1F, 0x00);
++	imx577_write_register(ViPipe, 0x3C20, 0x00);
++	imx577_write_register(ViPipe, 0x3C21, 0x00);
++	imx577_write_register(ViPipe, 0x3C22, 0x3F);
++	imx577_write_register(ViPipe, 0x3C23, 0x0A);
++	imx577_write_register(ViPipe, 0x3E35, 0x01);
++	imx577_write_register(ViPipe, 0x3F4A, 0x03);
++	imx577_write_register(ViPipe, 0x3F4B, 0xBF);
++	imx577_write_register(ViPipe, 0x3F26, 0x00);
++
++	imx577_write_register(ViPipe, 0x0202, 0x12);
++	imx577_write_register(ViPipe, 0x0203, 0x07);
++
++	imx577_write_register(ViPipe, 0x0204, 0x00);
++	imx577_write_register(ViPipe, 0x0205, 0x00);
++	imx577_write_register(ViPipe, 0x020E, 0x01);
++	imx577_write_register(ViPipe, 0x020F, 0x00);
++	imx577_write_register(ViPipe, 0x0210, 0x01);
++	imx577_write_register(ViPipe, 0x0211, 0x00);
++	imx577_write_register(ViPipe, 0x0212, 0x01);
++	imx577_write_register(ViPipe, 0x0213, 0x00);
++	imx577_write_register(ViPipe, 0x0214, 0x01);
++	imx577_write_register(ViPipe, 0x0215, 0x00);
++
++	imx577_write_register(ViPipe, 0x0100, 0x01);
++	imx577_write_register(ViPipe, 0x0100, 0x00);
++	imx577_write_register(ViPipe, 0x0100, 0x01);
++
++	imx577_default_reg_init(ViPipe);
++	delay_ms(40);
++
++	CVI_TRACE_SNS(CVI_DBG_INFO, "ViPipe:%d,===IMX577 MASTER 12M20 Init success!===\n", ViPipe);
++}
++
++static void imx577_linear_12m20_init(VI_PIPE ViPipe)
++{
++	delay_ms(40);
++
++	// 27M 4056x3040@25 10bit
++
++
++	imx577_write_register(ViPipe, 0x0136, 0x1B);
++	imx577_write_register(ViPipe, 0x0137, 0x00);
++
++	imx577_write_register(ViPipe, 0x3C7E, 0x01);
++	imx577_write_register(ViPipe, 0x3C7F, 0x02);
++
++	imx577_write_register(ViPipe, 0x38A8, 0x1F);
++	imx577_write_register(ViPipe, 0x38A9, 0xFF);
++	imx577_write_register(ViPipe, 0x38AA, 0x1F);
++	imx577_write_register(ViPipe, 0x38AB, 0xFF);
++	imx577_write_register(ViPipe, 0x55D4, 0x00);
++	imx577_write_register(ViPipe, 0x55D5, 0x00);
++	imx577_write_register(ViPipe, 0x55D6, 0x07);
++	imx577_write_register(ViPipe, 0x55D7, 0xFF);
++	imx577_write_register(ViPipe, 0x55E8, 0x07);
++	imx577_write_register(ViPipe, 0x55E9, 0xFF);
++	imx577_write_register(ViPipe, 0x55EA, 0x00);
++	imx577_write_register(ViPipe, 0x55EB, 0x00);
++	imx577_write_register(ViPipe, 0x575C, 0x07);
++	imx577_write_register(ViPipe, 0x575D, 0xFF);
++	imx577_write_register(ViPipe, 0x575E, 0x00);
++	imx577_write_register(ViPipe, 0x575F, 0x00);
++	imx577_write_register(ViPipe, 0x5764, 0x00);
++	imx577_write_register(ViPipe, 0x5765, 0x00);
++	imx577_write_register(ViPipe, 0x5766, 0x07);
++	imx577_write_register(ViPipe, 0x5767, 0xFF);
++	imx577_write_register(ViPipe, 0x5974, 0x04);
++	imx577_write_register(ViPipe, 0x5975, 0x01);
++	imx577_write_register(ViPipe, 0x5F10, 0x09);
++	imx577_write_register(ViPipe, 0x5F11, 0x92);
++	imx577_write_register(ViPipe, 0x5F12, 0x32);
++	imx577_write_register(ViPipe, 0x5F13, 0x72);
++	imx577_write_register(ViPipe, 0x5F14, 0x16);
++	imx577_write_register(ViPipe, 0x5F15, 0xBA);
++	imx577_write_register(ViPipe, 0x5F17, 0x13);
++	imx577_write_register(ViPipe, 0x5F18, 0x24);
++	imx577_write_register(ViPipe, 0x5F19, 0x60);
++	imx577_write_register(ViPipe, 0x5F1A, 0xE3);
++	imx577_write_register(ViPipe, 0x5F1B, 0xAD);
++	imx577_write_register(ViPipe, 0x5F1C, 0x74);
++	imx577_write_register(ViPipe, 0x5F2D, 0x25);
++	imx577_write_register(ViPipe, 0x5F5C, 0xD0);
++	imx577_write_register(ViPipe, 0x6A22, 0x00);
++	imx577_write_register(ViPipe, 0x6A23, 0x1D);
++	imx577_write_register(ViPipe, 0x7BA8, 0x00);
++	imx577_write_register(ViPipe, 0x7BA9, 0x00);
++	imx577_write_register(ViPipe, 0x886B, 0x00);
++	imx577_write_register(ViPipe, 0x9002, 0x0A);
++	imx577_write_register(ViPipe, 0x9004, 0x1A);
++	imx577_write_register(ViPipe, 0x9214, 0x93);
++	imx577_write_register(ViPipe, 0x9215, 0x69);
++	imx577_write_register(ViPipe, 0x9216, 0x93);
++	imx577_write_register(ViPipe, 0x9217, 0x6B);
++	imx577_write_register(ViPipe, 0x9218, 0x93);
++	imx577_write_register(ViPipe, 0x9219, 0x6D);
++	imx577_write_register(ViPipe, 0x921A, 0x57);
++	imx577_write_register(ViPipe, 0x921B, 0x58);
++	imx577_write_register(ViPipe, 0x921C, 0x57);
++	imx577_write_register(ViPipe, 0x921D, 0x59);
++	imx577_write_register(ViPipe, 0x921E, 0x57);
++	imx577_write_register(ViPipe, 0x921F, 0x5A);
++	imx577_write_register(ViPipe, 0x9220, 0x57);
++	imx577_write_register(ViPipe, 0x9221, 0x5B);
++	imx577_write_register(ViPipe, 0x9222, 0x93);
++	imx577_write_register(ViPipe, 0x9223, 0x02);
++	imx577_write_register(ViPipe, 0x9224, 0x93);
++	imx577_write_register(ViPipe, 0x9225, 0x03);
++	imx577_write_register(ViPipe, 0x9226, 0x93);
++	imx577_write_register(ViPipe, 0x9227, 0x04);
++	imx577_write_register(ViPipe, 0x9228, 0x93);
++	imx577_write_register(ViPipe, 0x9229, 0x05);
++	imx577_write_register(ViPipe, 0x922A, 0x98);
++	imx577_write_register(ViPipe, 0x922B, 0x21);
++	imx577_write_register(ViPipe, 0x922C, 0xB2);
++	imx577_write_register(ViPipe, 0x922D, 0xDB);
++	imx577_write_register(ViPipe, 0x922E, 0xB2);
++	imx577_write_register(ViPipe, 0x922F, 0xDC);
++	imx577_write_register(ViPipe, 0x9230, 0xB2);
++	imx577_write_register(ViPipe, 0x9231, 0xDD);
++	imx577_write_register(ViPipe, 0x9232, 0xB2);
++	imx577_write_register(ViPipe, 0x9233, 0xE1);
++	imx577_write_register(ViPipe, 0x9234, 0xB2);
++	imx577_write_register(ViPipe, 0x9235, 0xE2);
++	imx577_write_register(ViPipe, 0x9236, 0xB2);
++	imx577_write_register(ViPipe, 0x9237, 0xE3);
++	imx577_write_register(ViPipe, 0x9238, 0xB7);
++	imx577_write_register(ViPipe, 0x9239, 0xB9);
++	imx577_write_register(ViPipe, 0x923A, 0xB7);
++	imx577_write_register(ViPipe, 0x923B, 0xBB);
++	imx577_write_register(ViPipe, 0x923C, 0xB7);
++	imx577_write_register(ViPipe, 0x923D, 0xBC);
++	imx577_write_register(ViPipe, 0x923E, 0xB7);
++	imx577_write_register(ViPipe, 0x923F, 0xC5);
++	imx577_write_register(ViPipe, 0x9240, 0xB7);
++	imx577_write_register(ViPipe, 0x9241, 0xC7);
++	imx577_write_register(ViPipe, 0x9242, 0xB7);
++	imx577_write_register(ViPipe, 0x9243, 0xC9);
++	imx577_write_register(ViPipe, 0x9244, 0x98);
++	imx577_write_register(ViPipe, 0x9245, 0x56);
++	imx577_write_register(ViPipe, 0x9246, 0x98);
++	imx577_write_register(ViPipe, 0x9247, 0x55);
++	imx577_write_register(ViPipe, 0x9380, 0x00);
++	imx577_write_register(ViPipe, 0x9381, 0x62);
++	imx577_write_register(ViPipe, 0x9382, 0x00);
++	imx577_write_register(ViPipe, 0x9383, 0x56);
++	imx577_write_register(ViPipe, 0x9384, 0x00);
++	imx577_write_register(ViPipe, 0x9385, 0x52);
++	imx577_write_register(ViPipe, 0x9388, 0x00);
++	imx577_write_register(ViPipe, 0x9389, 0x55);
++	imx577_write_register(ViPipe, 0x938A, 0x00);
++	imx577_write_register(ViPipe, 0x938B, 0x55);
++	imx577_write_register(ViPipe, 0x938C, 0x00);
++	imx577_write_register(ViPipe, 0x938D, 0x41);
++	imx577_write_register(ViPipe, 0x5078, 0x01);
++
++
++	imx577_write_register(ViPipe, 0x9827, 0x20);
++	imx577_write_register(ViPipe, 0x9830, 0x0A);
++	imx577_write_register(ViPipe, 0x9833, 0x0A);
++	imx577_write_register(ViPipe, 0x9834, 0x32);
++	imx577_write_register(ViPipe, 0x9837, 0x22);
++	imx577_write_register(ViPipe, 0x983C, 0x04);
++	imx577_write_register(ViPipe, 0x983F, 0x0A);
++	imx577_write_register(ViPipe, 0x994F, 0x00);
++	imx577_write_register(ViPipe, 0x9A48, 0x06);
++	imx577_write_register(ViPipe, 0x9A49, 0x06);
++	imx577_write_register(ViPipe, 0x9A4A, 0x06);
++	imx577_write_register(ViPipe, 0x9A4B, 0x06);
++	imx577_write_register(ViPipe, 0x9A4E, 0x03);
++	imx577_write_register(ViPipe, 0x9A4F, 0x03);
++	imx577_write_register(ViPipe, 0x9A54, 0x03);
++	imx577_write_register(ViPipe, 0x9A66, 0x03);
++	imx577_write_register(ViPipe, 0x9A67, 0x03);
++	imx577_write_register(ViPipe, 0xA2C9, 0x02);
++	imx577_write_register(ViPipe, 0xA2CB, 0x02);
++	imx577_write_register(ViPipe, 0xA2CD, 0x02);
++	imx577_write_register(ViPipe, 0xB249, 0x3F);
++	imx577_write_register(ViPipe, 0xB24F, 0x3F);
++	imx577_write_register(ViPipe, 0xB290, 0x3F);
++	imx577_write_register(ViPipe, 0xB293, 0x3F);
++	imx577_write_register(ViPipe, 0xB296, 0x3F);
++	imx577_write_register(ViPipe, 0xB299, 0x3F);
++	imx577_write_register(ViPipe, 0xB2A2, 0x3F);
++	imx577_write_register(ViPipe, 0xB2A8, 0x3F);
++	imx577_write_register(ViPipe, 0xB2A9, 0x0D);
++	imx577_write_register(ViPipe, 0xB2AA, 0x0D);
++	imx577_write_register(ViPipe, 0xB2AB, 0x3F);
++	imx577_write_register(ViPipe, 0xB2BA, 0x2F);
++	imx577_write_register(ViPipe, 0xB2BB, 0x2F);
++	imx577_write_register(ViPipe, 0xB2BC, 0x2F);
++	imx577_write_register(ViPipe, 0xB2BD, 0x10);
++	imx577_write_register(ViPipe, 0xB2C0, 0x3F);
++	imx577_write_register(ViPipe, 0xB2C3, 0x3F);
++	imx577_write_register(ViPipe, 0xB2D2, 0x3F);
++	imx577_write_register(ViPipe, 0xB2DE, 0x20);
++	imx577_write_register(ViPipe, 0xB2DF, 0x20);
++	imx577_write_register(ViPipe, 0xB2E0, 0x20);
++	imx577_write_register(ViPipe, 0xB2EA, 0x3F);
++	imx577_write_register(ViPipe, 0xB2ED, 0x3F);
++	imx577_write_register(ViPipe, 0xB2EE, 0x3F);
++	imx577_write_register(ViPipe, 0xB2EF, 0x3F);
++	imx577_write_register(ViPipe, 0xB2F0, 0x2F);
++	imx577_write_register(ViPipe, 0xB2F1, 0x2F);
++	imx577_write_register(ViPipe, 0xB2F2, 0x2F);
++	imx577_write_register(ViPipe, 0xB2F9, 0x0E);
++	imx577_write_register(ViPipe, 0xB2FA, 0x0E);
++	imx577_write_register(ViPipe, 0xB2FB, 0x0E);
++	imx577_write_register(ViPipe, 0xB759, 0x01);
++	imx577_write_register(ViPipe, 0xB765, 0x3F);
++	imx577_write_register(ViPipe, 0xB76B, 0x3F);
++	imx577_write_register(ViPipe, 0xB7B3, 0x03);
++	imx577_write_register(ViPipe, 0xB7B5, 0x03);
++	imx577_write_register(ViPipe, 0xB7B7, 0x03);
++	imx577_write_register(ViPipe, 0xB7BF, 0x03);
++	imx577_write_register(ViPipe, 0xB7C1, 0x03);
++	imx577_write_register(ViPipe, 0xB7C3, 0x03);
++	imx577_write_register(ViPipe, 0xB7EF, 0x02);
++	imx577_write_register(ViPipe, 0xB7F5, 0x1F);
++	imx577_write_register(ViPipe, 0xB7F7, 0x1F);
++	imx577_write_register(ViPipe, 0xB7F9, 0x1F);
++
++	imx577_write_register(ViPipe, 0x0112, 0x0A);
++	imx577_write_register(ViPipe, 0x0113, 0x0A);
++	imx577_write_register(ViPipe, 0x0114, 0x03);
++
++	imx577_write_register(ViPipe, 0x0342, 0x11);
++	imx577_write_register(ViPipe, 0x0343, 0xA0);
++
++	imx577_write_register(ViPipe, 0x0340, 0x12);
++	imx577_write_register(ViPipe, 0x0341, 0x1D);
++	imx577_write_register(ViPipe, 0x3210, 0x00);
++
++	imx577_write_register(ViPipe, 0x0344, 0x00);
++	imx577_write_register(ViPipe, 0x0345, 0x00);
++	imx577_write_register(ViPipe, 0x0346, 0x00);
++	imx577_write_register(ViPipe, 0x0347, 0x00);
++	imx577_write_register(ViPipe, 0x0348, 0x0F);
++	imx577_write_register(ViPipe, 0x0349, 0xD7);
++	imx577_write_register(ViPipe, 0x034A, 0x0B);
++	imx577_write_register(ViPipe, 0x034B, 0xDF);
++
++	imx577_write_register(ViPipe, 0x00E3, 0x00);
++	imx577_write_register(ViPipe, 0x00E4, 0x00);
++	imx577_write_register(ViPipe, 0x00E5, 0x01);
++	imx577_write_register(ViPipe, 0x00FC, 0x0A);
++	imx577_write_register(ViPipe, 0x00FD, 0x0A);
++	imx577_write_register(ViPipe, 0x00FE, 0x0A);
++	imx577_write_register(ViPipe, 0x00FF, 0x0A);
++	imx577_write_register(ViPipe, 0xE013, 0x00);
++	imx577_write_register(ViPipe, 0x0220, 0x00);
++	imx577_write_register(ViPipe, 0x0221, 0x11);
++	imx577_write_register(ViPipe, 0x0381, 0x01);
++	imx577_write_register(ViPipe, 0x0383, 0x01);
++	imx577_write_register(ViPipe, 0x0385, 0x01);
++	imx577_write_register(ViPipe, 0x0387, 0x01);
++	imx577_write_register(ViPipe, 0x0900, 0x00);
++	imx577_write_register(ViPipe, 0x0901, 0x11);
++	imx577_write_register(ViPipe, 0x0902, 0x00);
++	imx577_write_register(ViPipe, 0x3140, 0x02);
++	imx577_write_register(ViPipe, 0x3241, 0x11);
++	imx577_write_register(ViPipe, 0x3250, 0x03);
++	imx577_write_register(ViPipe, 0x3E10, 0x00);
++	imx577_write_register(ViPipe, 0x3E11, 0x00);
++	imx577_write_register(ViPipe, 0x3F0D, 0x00);
++	imx577_write_register(ViPipe, 0x3F42, 0x00);
++	imx577_write_register(ViPipe, 0x3F43, 0x00);
++
++	imx577_write_register(ViPipe, 0x0401, 0x00);
++	imx577_write_register(ViPipe, 0x0404, 0x00);
++	imx577_write_register(ViPipe, 0x0405, 0x10);
++	imx577_write_register(ViPipe, 0x0408, 0x00);
++	imx577_write_register(ViPipe, 0x0409, 0x00);
++	imx577_write_register(ViPipe, 0x040A, 0x00);
++	imx577_write_register(ViPipe, 0x040B, 0x00);
++	imx577_write_register(ViPipe, 0x040C, 0x0F);
++	imx577_write_register(ViPipe, 0x040D, 0xD8);
++	imx577_write_register(ViPipe, 0x040E, 0x0B);
++	imx577_write_register(ViPipe, 0x040F, 0xE0);
++
++	imx577_write_register(ViPipe, 0x034C, 0x0F);
++	imx577_write_register(ViPipe, 0x034D, 0xD8);
++	imx577_write_register(ViPipe, 0x034E, 0x0B);
++	imx577_write_register(ViPipe, 0x034F, 0xE0);
++
++	imx577_write_register(ViPipe, 0x0301, 0x05);
++	imx577_write_register(ViPipe, 0x0303, 0x04);
++	imx577_write_register(ViPipe, 0x0305, 0x04);
++	imx577_write_register(ViPipe, 0x0306, 0x01);
++	imx577_write_register(ViPipe, 0x0307, 0x36);
++	imx577_write_register(ViPipe, 0x0309, 0x0A);
++	imx577_write_register(ViPipe, 0x030B, 0x01);
++	imx577_write_register(ViPipe, 0x030D, 0x03);
++	imx577_write_register(ViPipe, 0x030E, 0x00);
++	imx577_write_register(ViPipe, 0x030F, 0xA1);
++	imx577_write_register(ViPipe, 0x0310, 0x01);
++	imx577_write_register(ViPipe, 0x0820, 0x16);
++	imx577_write_register(ViPipe, 0x0821, 0xA4);
++	imx577_write_register(ViPipe, 0x0822, 0x00);
++	imx577_write_register(ViPipe, 0x0823, 0x00);
++
++	imx577_write_register(ViPipe, 0x3E20, 0x01);
++	imx577_write_register(ViPipe, 0x3E37, 0x00);
++
++	imx577_write_register(ViPipe, 0x3F50, 0x00);
++	imx577_write_register(ViPipe, 0x3F56, 0x01);
++	imx577_write_register(ViPipe, 0x3F57, 0x24);
++
++	imx577_write_register(ViPipe, 0x3C0A, 0x5A);
++	imx577_write_register(ViPipe, 0x3C0B, 0x55);
++	imx577_write_register(ViPipe, 0x3C0C, 0x28);
++	imx577_write_register(ViPipe, 0x3C0D, 0x07);
++	imx577_write_register(ViPipe, 0x3C0E, 0xFF);
++	imx577_write_register(ViPipe, 0x3C0F, 0x00);
++	imx577_write_register(ViPipe, 0x3C10, 0x00);
++	imx577_write_register(ViPipe, 0x3C11, 0x02);
++	imx577_write_register(ViPipe, 0x3C12, 0x00);
++	imx577_write_register(ViPipe, 0x3C13, 0x03);
++	imx577_write_register(ViPipe, 0x3C14, 0x00);
++	imx577_write_register(ViPipe, 0x3C15, 0x00);
++	imx577_write_register(ViPipe, 0x3C16, 0x0C);
++	imx577_write_register(ViPipe, 0x3C17, 0x0C);
++	imx577_write_register(ViPipe, 0x3C18, 0x0C);
++	imx577_write_register(ViPipe, 0x3C19, 0x0A);
++	imx577_write_register(ViPipe, 0x3C1A, 0x0A);
++	imx577_write_register(ViPipe, 0x3C1B, 0x0A);
++	imx577_write_register(ViPipe, 0x3C1C, 0x00);
++	imx577_write_register(ViPipe, 0x3C1D, 0x00);
++	imx577_write_register(ViPipe, 0x3C1E, 0x00);
++	imx577_write_register(ViPipe, 0x3C1F, 0x00);
++	imx577_write_register(ViPipe, 0x3C20, 0x00);
++	imx577_write_register(ViPipe, 0x3C21, 0x00);
++	imx577_write_register(ViPipe, 0x3C22, 0x3F);
++	imx577_write_register(ViPipe, 0x3C23, 0x0A);
++	imx577_write_register(ViPipe, 0x3E35, 0x01);
++	imx577_write_register(ViPipe, 0x3F4A, 0x03);
++	imx577_write_register(ViPipe, 0x3F4B, 0xBF);
++	imx577_write_register(ViPipe, 0x3F26, 0x00);
++
++	imx577_write_register(ViPipe, 0x0202, 0x12);
++	imx577_write_register(ViPipe, 0x0203, 0x07);
++
++	imx577_write_register(ViPipe, 0x0204, 0x00);
++	imx577_write_register(ViPipe, 0x0205, 0x00);
++	imx577_write_register(ViPipe, 0x020E, 0x01);
++	imx577_write_register(ViPipe, 0x020F, 0x00);
++	imx577_write_register(ViPipe, 0x0210, 0x01);
++	imx577_write_register(ViPipe, 0x0211, 0x00);
++	imx577_write_register(ViPipe, 0x0212, 0x01);
++	imx577_write_register(ViPipe, 0x0213, 0x00);
++	imx577_write_register(ViPipe, 0x0214, 0x01);
++	imx577_write_register(ViPipe, 0x0215, 0x00);
++
++	imx577_write_register(ViPipe, 0x0100, 0x01);
++	imx577_write_register(ViPipe, 0x0100, 0x00);
++	imx577_write_register(ViPipe, 0x0100, 0x01);
++
++	imx577_default_reg_init(ViPipe);
++	delay_ms(40);
++
++	CVI_TRACE_SNS(CVI_DBG_INFO, "ViPipe:%d,===IMX577 12M20 Init success!===\n", ViPipe);
++}
++
++static void imx577_linear_slave_12m20_init(VI_PIPE ViPipe)
++{
++	delay_ms(40);
++
++	// 27M 4056x3040@25 10bit
++
++
++	imx577_write_register(ViPipe, 0x0136, 0x1B);
++	imx577_write_register(ViPipe, 0x0137, 0x00);
++
++	imx577_write_register(ViPipe, 0x3C7E, 0x01);
++	imx577_write_register(ViPipe, 0x3C7F, 0x02);
++
++	imx577_write_register(ViPipe, 0x4b81, 0x00);
++	imx577_write_register(ViPipe, 0x3040, 0x00); //XVS IO CTRL 1:MASTER 0:SLAVE
++	imx577_write_register(ViPipe, 0x3041, 0x00); //SLAVE MODE
++
++	imx577_write_register(ViPipe, 0x38A8, 0x1F);
++	imx577_write_register(ViPipe, 0x38A9, 0xFF);
++	imx577_write_register(ViPipe, 0x38AA, 0x1F);
++	imx577_write_register(ViPipe, 0x38AB, 0xFF);
++	imx577_write_register(ViPipe, 0x55D4, 0x00);
++	imx577_write_register(ViPipe, 0x55D5, 0x00);
++	imx577_write_register(ViPipe, 0x55D6, 0x07);
++	imx577_write_register(ViPipe, 0x55D7, 0xFF);
++	imx577_write_register(ViPipe, 0x55E8, 0x07);
++	imx577_write_register(ViPipe, 0x55E9, 0xFF);
++	imx577_write_register(ViPipe, 0x55EA, 0x00);
++	imx577_write_register(ViPipe, 0x55EB, 0x00);
++	imx577_write_register(ViPipe, 0x575C, 0x07);
++	imx577_write_register(ViPipe, 0x575D, 0xFF);
++	imx577_write_register(ViPipe, 0x575E, 0x00);
++	imx577_write_register(ViPipe, 0x575F, 0x00);
++	imx577_write_register(ViPipe, 0x5764, 0x00);
++	imx577_write_register(ViPipe, 0x5765, 0x00);
++	imx577_write_register(ViPipe, 0x5766, 0x07);
++	imx577_write_register(ViPipe, 0x5767, 0xFF);
++	imx577_write_register(ViPipe, 0x5974, 0x04);
++	imx577_write_register(ViPipe, 0x5975, 0x01);
++	imx577_write_register(ViPipe, 0x5F10, 0x09);
++	imx577_write_register(ViPipe, 0x5F11, 0x92);
++	imx577_write_register(ViPipe, 0x5F12, 0x32);
++	imx577_write_register(ViPipe, 0x5F13, 0x72);
++	imx577_write_register(ViPipe, 0x5F14, 0x16);
++	imx577_write_register(ViPipe, 0x5F15, 0xBA);
++	imx577_write_register(ViPipe, 0x5F17, 0x13);
++	imx577_write_register(ViPipe, 0x5F18, 0x24);
++	imx577_write_register(ViPipe, 0x5F19, 0x60);
++	imx577_write_register(ViPipe, 0x5F1A, 0xE3);
++	imx577_write_register(ViPipe, 0x5F1B, 0xAD);
++	imx577_write_register(ViPipe, 0x5F1C, 0x74);
++	imx577_write_register(ViPipe, 0x5F2D, 0x25);
++	imx577_write_register(ViPipe, 0x5F5C, 0xD0);
++	imx577_write_register(ViPipe, 0x6A22, 0x00);
++	imx577_write_register(ViPipe, 0x6A23, 0x1D);
++	imx577_write_register(ViPipe, 0x7BA8, 0x00);
++	imx577_write_register(ViPipe, 0x7BA9, 0x00);
++	imx577_write_register(ViPipe, 0x886B, 0x00);
++	imx577_write_register(ViPipe, 0x9002, 0x0A);
++	imx577_write_register(ViPipe, 0x9004, 0x1A);
++	imx577_write_register(ViPipe, 0x9214, 0x93);
++	imx577_write_register(ViPipe, 0x9215, 0x69);
++	imx577_write_register(ViPipe, 0x9216, 0x93);
++	imx577_write_register(ViPipe, 0x9217, 0x6B);
++	imx577_write_register(ViPipe, 0x9218, 0x93);
++	imx577_write_register(ViPipe, 0x9219, 0x6D);
++	imx577_write_register(ViPipe, 0x921A, 0x57);
++	imx577_write_register(ViPipe, 0x921B, 0x58);
++	imx577_write_register(ViPipe, 0x921C, 0x57);
++	imx577_write_register(ViPipe, 0x921D, 0x59);
++	imx577_write_register(ViPipe, 0x921E, 0x57);
++	imx577_write_register(ViPipe, 0x921F, 0x5A);
++	imx577_write_register(ViPipe, 0x9220, 0x57);
++	imx577_write_register(ViPipe, 0x9221, 0x5B);
++	imx577_write_register(ViPipe, 0x9222, 0x93);
++	imx577_write_register(ViPipe, 0x9223, 0x02);
++	imx577_write_register(ViPipe, 0x9224, 0x93);
++	imx577_write_register(ViPipe, 0x9225, 0x03);
++	imx577_write_register(ViPipe, 0x9226, 0x93);
++	imx577_write_register(ViPipe, 0x9227, 0x04);
++	imx577_write_register(ViPipe, 0x9228, 0x93);
++	imx577_write_register(ViPipe, 0x9229, 0x05);
++	imx577_write_register(ViPipe, 0x922A, 0x98);
++	imx577_write_register(ViPipe, 0x922B, 0x21);
++	imx577_write_register(ViPipe, 0x922C, 0xB2);
++	imx577_write_register(ViPipe, 0x922D, 0xDB);
++	imx577_write_register(ViPipe, 0x922E, 0xB2);
++	imx577_write_register(ViPipe, 0x922F, 0xDC);
++	imx577_write_register(ViPipe, 0x9230, 0xB2);
++	imx577_write_register(ViPipe, 0x9231, 0xDD);
++	imx577_write_register(ViPipe, 0x9232, 0xB2);
++	imx577_write_register(ViPipe, 0x9233, 0xE1);
++	imx577_write_register(ViPipe, 0x9234, 0xB2);
++	imx577_write_register(ViPipe, 0x9235, 0xE2);
++	imx577_write_register(ViPipe, 0x9236, 0xB2);
++	imx577_write_register(ViPipe, 0x9237, 0xE3);
++	imx577_write_register(ViPipe, 0x9238, 0xB7);
++	imx577_write_register(ViPipe, 0x9239, 0xB9);
++	imx577_write_register(ViPipe, 0x923A, 0xB7);
++	imx577_write_register(ViPipe, 0x923B, 0xBB);
++	imx577_write_register(ViPipe, 0x923C, 0xB7);
++	imx577_write_register(ViPipe, 0x923D, 0xBC);
++	imx577_write_register(ViPipe, 0x923E, 0xB7);
++	imx577_write_register(ViPipe, 0x923F, 0xC5);
++	imx577_write_register(ViPipe, 0x9240, 0xB7);
++	imx577_write_register(ViPipe, 0x9241, 0xC7);
++	imx577_write_register(ViPipe, 0x9242, 0xB7);
++	imx577_write_register(ViPipe, 0x9243, 0xC9);
++	imx577_write_register(ViPipe, 0x9244, 0x98);
++	imx577_write_register(ViPipe, 0x9245, 0x56);
++	imx577_write_register(ViPipe, 0x9246, 0x98);
++	imx577_write_register(ViPipe, 0x9247, 0x55);
++	imx577_write_register(ViPipe, 0x9380, 0x00);
++	imx577_write_register(ViPipe, 0x9381, 0x62);
++	imx577_write_register(ViPipe, 0x9382, 0x00);
++	imx577_write_register(ViPipe, 0x9383, 0x56);
++	imx577_write_register(ViPipe, 0x9384, 0x00);
++	imx577_write_register(ViPipe, 0x9385, 0x52);
++	imx577_write_register(ViPipe, 0x9388, 0x00);
++	imx577_write_register(ViPipe, 0x9389, 0x55);
++	imx577_write_register(ViPipe, 0x938A, 0x00);
++	imx577_write_register(ViPipe, 0x938B, 0x55);
++	imx577_write_register(ViPipe, 0x938C, 0x00);
++	imx577_write_register(ViPipe, 0x938D, 0x41);
++	imx577_write_register(ViPipe, 0x5078, 0x01);
++
++
++	imx577_write_register(ViPipe, 0x9827, 0x20);
++	imx577_write_register(ViPipe, 0x9830, 0x0A);
++	imx577_write_register(ViPipe, 0x9833, 0x0A);
++	imx577_write_register(ViPipe, 0x9834, 0x32);
++	imx577_write_register(ViPipe, 0x9837, 0x22);
++	imx577_write_register(ViPipe, 0x983C, 0x04);
++	imx577_write_register(ViPipe, 0x983F, 0x0A);
++	imx577_write_register(ViPipe, 0x994F, 0x00);
++	imx577_write_register(ViPipe, 0x9A48, 0x06);
++	imx577_write_register(ViPipe, 0x9A49, 0x06);
++	imx577_write_register(ViPipe, 0x9A4A, 0x06);
++	imx577_write_register(ViPipe, 0x9A4B, 0x06);
++	imx577_write_register(ViPipe, 0x9A4E, 0x03);
++	imx577_write_register(ViPipe, 0x9A4F, 0x03);
++	imx577_write_register(ViPipe, 0x9A54, 0x03);
++	imx577_write_register(ViPipe, 0x9A66, 0x03);
++	imx577_write_register(ViPipe, 0x9A67, 0x03);
++	imx577_write_register(ViPipe, 0xA2C9, 0x02);
++	imx577_write_register(ViPipe, 0xA2CB, 0x02);
++	imx577_write_register(ViPipe, 0xA2CD, 0x02);
++	imx577_write_register(ViPipe, 0xB249, 0x3F);
++	imx577_write_register(ViPipe, 0xB24F, 0x3F);
++	imx577_write_register(ViPipe, 0xB290, 0x3F);
++	imx577_write_register(ViPipe, 0xB293, 0x3F);
++	imx577_write_register(ViPipe, 0xB296, 0x3F);
++	imx577_write_register(ViPipe, 0xB299, 0x3F);
++	imx577_write_register(ViPipe, 0xB2A2, 0x3F);
++	imx577_write_register(ViPipe, 0xB2A8, 0x3F);
++	imx577_write_register(ViPipe, 0xB2A9, 0x0D);
++	imx577_write_register(ViPipe, 0xB2AA, 0x0D);
++	imx577_write_register(ViPipe, 0xB2AB, 0x3F);
++	imx577_write_register(ViPipe, 0xB2BA, 0x2F);
++	imx577_write_register(ViPipe, 0xB2BB, 0x2F);
++	imx577_write_register(ViPipe, 0xB2BC, 0x2F);
++	imx577_write_register(ViPipe, 0xB2BD, 0x10);
++	imx577_write_register(ViPipe, 0xB2C0, 0x3F);
++	imx577_write_register(ViPipe, 0xB2C3, 0x3F);
++	imx577_write_register(ViPipe, 0xB2D2, 0x3F);
++	imx577_write_register(ViPipe, 0xB2DE, 0x20);
++	imx577_write_register(ViPipe, 0xB2DF, 0x20);
++	imx577_write_register(ViPipe, 0xB2E0, 0x20);
++	imx577_write_register(ViPipe, 0xB2EA, 0x3F);
++	imx577_write_register(ViPipe, 0xB2ED, 0x3F);
++	imx577_write_register(ViPipe, 0xB2EE, 0x3F);
++	imx577_write_register(ViPipe, 0xB2EF, 0x3F);
++	imx577_write_register(ViPipe, 0xB2F0, 0x2F);
++	imx577_write_register(ViPipe, 0xB2F1, 0x2F);
++	imx577_write_register(ViPipe, 0xB2F2, 0x2F);
++	imx577_write_register(ViPipe, 0xB2F9, 0x0E);
++	imx577_write_register(ViPipe, 0xB2FA, 0x0E);
++	imx577_write_register(ViPipe, 0xB2FB, 0x0E);
++	imx577_write_register(ViPipe, 0xB759, 0x01);
++	imx577_write_register(ViPipe, 0xB765, 0x3F);
++	imx577_write_register(ViPipe, 0xB76B, 0x3F);
++	imx577_write_register(ViPipe, 0xB7B3, 0x03);
++	imx577_write_register(ViPipe, 0xB7B5, 0x03);
++	imx577_write_register(ViPipe, 0xB7B7, 0x03);
++	imx577_write_register(ViPipe, 0xB7BF, 0x03);
++	imx577_write_register(ViPipe, 0xB7C1, 0x03);
++	imx577_write_register(ViPipe, 0xB7C3, 0x03);
++	imx577_write_register(ViPipe, 0xB7EF, 0x02);
++	imx577_write_register(ViPipe, 0xB7F5, 0x1F);
++	imx577_write_register(ViPipe, 0xB7F7, 0x1F);
++	imx577_write_register(ViPipe, 0xB7F9, 0x1F);
++
++	imx577_write_register(ViPipe, 0x0112, 0x0A);
++	imx577_write_register(ViPipe, 0x0113, 0x0A);
++	imx577_write_register(ViPipe, 0x0114, 0x03);
++
++	imx577_write_register(ViPipe, 0x0342, 0x11);
++	imx577_write_register(ViPipe, 0x0343, 0xA0);
++
++	imx577_write_register(ViPipe, 0x0340, 0x12);
++	imx577_write_register(ViPipe, 0x0341, 0x1D);
++	imx577_write_register(ViPipe, 0x3210, 0x00);
++
++	imx577_write_register(ViPipe, 0x0344, 0x00);
++	imx577_write_register(ViPipe, 0x0345, 0x00);
++	imx577_write_register(ViPipe, 0x0346, 0x00);
++	imx577_write_register(ViPipe, 0x0347, 0x00);
++	imx577_write_register(ViPipe, 0x0348, 0x0F);
++	imx577_write_register(ViPipe, 0x0349, 0xD7);
++	imx577_write_register(ViPipe, 0x034A, 0x0B);
++	imx577_write_register(ViPipe, 0x034B, 0xDF);
++
++	imx577_write_register(ViPipe, 0x00E3, 0x00);
++	imx577_write_register(ViPipe, 0x00E4, 0x00);
++	imx577_write_register(ViPipe, 0x00E5, 0x01);
++	imx577_write_register(ViPipe, 0x00FC, 0x0A);
++	imx577_write_register(ViPipe, 0x00FD, 0x0A);
++	imx577_write_register(ViPipe, 0x00FE, 0x0A);
++	imx577_write_register(ViPipe, 0x00FF, 0x0A);
++	imx577_write_register(ViPipe, 0xE013, 0x00);
++	imx577_write_register(ViPipe, 0x0220, 0x00);
++	imx577_write_register(ViPipe, 0x0221, 0x11);
++	imx577_write_register(ViPipe, 0x0381, 0x01);
++	imx577_write_register(ViPipe, 0x0383, 0x01);
++	imx577_write_register(ViPipe, 0x0385, 0x01);
++	imx577_write_register(ViPipe, 0x0387, 0x01);
++	imx577_write_register(ViPipe, 0x0900, 0x00);
++	imx577_write_register(ViPipe, 0x0901, 0x11);
++	imx577_write_register(ViPipe, 0x0902, 0x00);
++	imx577_write_register(ViPipe, 0x3140, 0x02);
++	imx577_write_register(ViPipe, 0x3241, 0x11);
++	imx577_write_register(ViPipe, 0x3250, 0x03);
++	imx577_write_register(ViPipe, 0x3E10, 0x00);
++	imx577_write_register(ViPipe, 0x3E11, 0x00);
++	imx577_write_register(ViPipe, 0x3F0D, 0x00);
++	imx577_write_register(ViPipe, 0x3F42, 0x00);
++	imx577_write_register(ViPipe, 0x3F43, 0x00);
++
++	imx577_write_register(ViPipe, 0x0401, 0x00);
++	imx577_write_register(ViPipe, 0x0404, 0x00);
++	imx577_write_register(ViPipe, 0x0405, 0x10);
++	imx577_write_register(ViPipe, 0x0408, 0x00);
++	imx577_write_register(ViPipe, 0x0409, 0x00);
++	imx577_write_register(ViPipe, 0x040A, 0x00);
++	imx577_write_register(ViPipe, 0x040B, 0x00);
++	imx577_write_register(ViPipe, 0x040C, 0x0F);
++	imx577_write_register(ViPipe, 0x040D, 0xD8);
++	imx577_write_register(ViPipe, 0x040E, 0x0B);
++	imx577_write_register(ViPipe, 0x040F, 0xE0);
++
++	imx577_write_register(ViPipe, 0x034C, 0x0F);
++	imx577_write_register(ViPipe, 0x034D, 0xD8);
++	imx577_write_register(ViPipe, 0x034E, 0x0B);
++	imx577_write_register(ViPipe, 0x034F, 0xE0);
++
++	imx577_write_register(ViPipe, 0x0301, 0x05);
++	imx577_write_register(ViPipe, 0x0303, 0x04);
++	imx577_write_register(ViPipe, 0x0305, 0x04);
++	imx577_write_register(ViPipe, 0x0306, 0x01);
++	imx577_write_register(ViPipe, 0x0307, 0x36);
++	imx577_write_register(ViPipe, 0x0309, 0x0A);
++	imx577_write_register(ViPipe, 0x030B, 0x01);
++	imx577_write_register(ViPipe, 0x030D, 0x03);
++	imx577_write_register(ViPipe, 0x030E, 0x00);
++	imx577_write_register(ViPipe, 0x030F, 0xA1);
++	imx577_write_register(ViPipe, 0x0310, 0x01);
++	imx577_write_register(ViPipe, 0x0820, 0x16);
++	imx577_write_register(ViPipe, 0x0821, 0xA4);
++	imx577_write_register(ViPipe, 0x0822, 0x00);
++	imx577_write_register(ViPipe, 0x0823, 0x00);
++
++	imx577_write_register(ViPipe, 0x3E20, 0x01);
++	imx577_write_register(ViPipe, 0x3E37, 0x00);
++
++	imx577_write_register(ViPipe, 0x3F50, 0x00);
++	imx577_write_register(ViPipe, 0x3F56, 0x01);
++	imx577_write_register(ViPipe, 0x3F57, 0x24);
++
++	imx577_write_register(ViPipe, 0x3C0A, 0x5A);
++	imx577_write_register(ViPipe, 0x3C0B, 0x55);
++	imx577_write_register(ViPipe, 0x3C0C, 0x28);
++	imx577_write_register(ViPipe, 0x3C0D, 0x07);
++	imx577_write_register(ViPipe, 0x3C0E, 0xFF);
++	imx577_write_register(ViPipe, 0x3C0F, 0x00);
++	imx577_write_register(ViPipe, 0x3C10, 0x00);
++	imx577_write_register(ViPipe, 0x3C11, 0x02);
++	imx577_write_register(ViPipe, 0x3C12, 0x00);
++	imx577_write_register(ViPipe, 0x3C13, 0x03);
++	imx577_write_register(ViPipe, 0x3C14, 0x00);
++	imx577_write_register(ViPipe, 0x3C15, 0x00);
++	imx577_write_register(ViPipe, 0x3C16, 0x0C);
++	imx577_write_register(ViPipe, 0x3C17, 0x0C);
++	imx577_write_register(ViPipe, 0x3C18, 0x0C);
++	imx577_write_register(ViPipe, 0x3C19, 0x0A);
++	imx577_write_register(ViPipe, 0x3C1A, 0x0A);
++	imx577_write_register(ViPipe, 0x3C1B, 0x0A);
++	imx577_write_register(ViPipe, 0x3C1C, 0x00);
++	imx577_write_register(ViPipe, 0x3C1D, 0x00);
++	imx577_write_register(ViPipe, 0x3C1E, 0x00);
++	imx577_write_register(ViPipe, 0x3C1F, 0x00);
++	imx577_write_register(ViPipe, 0x3C20, 0x00);
++	imx577_write_register(ViPipe, 0x3C21, 0x00);
++	imx577_write_register(ViPipe, 0x3C22, 0x3F);
++	imx577_write_register(ViPipe, 0x3C23, 0x0A);
++	imx577_write_register(ViPipe, 0x3E35, 0x01);
++	imx577_write_register(ViPipe, 0x3F4A, 0x03);
++	imx577_write_register(ViPipe, 0x3F4B, 0xBF);
++	imx577_write_register(ViPipe, 0x3F26, 0x00);
++
++	imx577_write_register(ViPipe, 0x0202, 0x12);
++	imx577_write_register(ViPipe, 0x0203, 0x07);
++
++	imx577_write_register(ViPipe, 0x0204, 0x00);
++	imx577_write_register(ViPipe, 0x0205, 0x00);
++	imx577_write_register(ViPipe, 0x020E, 0x01);
++	imx577_write_register(ViPipe, 0x020F, 0x00);
++	imx577_write_register(ViPipe, 0x0210, 0x01);
++	imx577_write_register(ViPipe, 0x0211, 0x00);
++	imx577_write_register(ViPipe, 0x0212, 0x01);
++	imx577_write_register(ViPipe, 0x0213, 0x00);
++	imx577_write_register(ViPipe, 0x0214, 0x01);
++	imx577_write_register(ViPipe, 0x0215, 0x00);
++
++	imx577_write_register(ViPipe, 0x0100, 0x01);
++	imx577_write_register(ViPipe, 0x0100, 0x00);
++	imx577_write_register(ViPipe, 0x0100, 0x01);
++
++	imx577_default_reg_init(ViPipe);
++	delay_ms(40);
++
++	CVI_TRACE_SNS(CVI_DBG_INFO, "ViPipe:%d,===IMX577 SLAVE 12M20 Init success!===\n", ViPipe);
++}
++
++static void imx577_wdr_12m20_2to1_init(VI_PIPE ViPipe)
++{
++	delay_ms(4);
++
++	imx577_default_reg_init(ViPipe);
++
++	CVI_TRACE_SNS(CVI_DBG_INFO, "===Imx577 sensor 12M20 2to1 WDR init success!===\n");
++}
+diff --git a/v2/component/isp/sensor.mk b/v2/component/isp/sensor.mk
+index 2c5ab74ba..6c1366bb4 100644
+--- a/v2/component/isp/sensor.mk
++++ b/v2/component/isp/sensor.mk
+@@ -113,10 +113,12 @@ sensor-$(CONFIG_SENSOR_SONY_IMX334)          += sony_imx334
+ sensor-$(CONFIG_SENSOR_SONY_IMX335)          += sony_imx335
+ sensor-$(CONFIG_SENSOR_SONY_IMX412)          += sony_imx412
+ sensor-$(CONFIG_SENSOR_SONY_IMX415)          += sony_imx415
++sensor-$(CONFIG_SENSOR_SONY_IMX577)			 += sony_imx577
+ sensor-$(CONFIG_SENSOR_SONY_IMX585)          += sony_imx585
+ sensor-$(CONFIG_SENSOR_SONY_IMX900)          += sony_imx900
+ sensor-$(CONFIG_SENSOR_TECHPOINT_TP2860)     += techpoint_tp2860
+ sensor-$(CONFIG_SENSOR_LONTIUM_LT6911)       += lontium_lt6911
++
+ else
+ $(error not supported chip arch cv180x/cv181x/cv182x/cv183x/cv186x)
+ endif
+diff --git a/v2/include/cvi_sns_ctrl.h b/v2/include/cvi_sns_ctrl.h
+index 8d08b8498..51e6724bf 100644
+--- a/v2/include/cvi_sns_ctrl.h
++++ b/v2/include/cvi_sns_ctrl.h
+@@ -199,6 +199,7 @@ extern ISP_SNS_OBJ_S stSnsImx347_Obj;
+ extern ISP_SNS_OBJ_S stSnsImx385_Obj;
+ extern ISP_SNS_OBJ_S stSnsImx412_Obj;
+ extern ISP_SNS_OBJ_S stSnsImx415_Obj;
++extern ISP_SNS_OBJ_S stSnsImx577_Obj;
+ extern ISP_SNS_OBJ_S stSnsImx585_Obj;
+ extern ISP_SNS_OBJ_S stSnsImx900_Obj;
+ extern ISP_SNS_OBJ_S stSnsTP2850_Obj;
+diff --git a/v2/sample/Kbuild b/v2/sample/Kbuild
+index 36317eae9..acd3463ed 100644
+--- a/v2/sample/Kbuild
++++ b/v2/sample/Kbuild
+@@ -325,6 +325,10 @@ ifeq ($(CONFIG_SENSOR_SONY_IMX415), y)
+     KBUILD_DEFINES += -DSENSOR_SONY_IMX415
+ endif
+ 
++ifeq ($(CONFIG_SENSOR_SONY_IMX577), y)
++	KBUILD_DEFINES += -DSENSOR_SONY_IMX577
++endif
++
+ ifeq ($(CONFIG_SENSOR_SONY_IMX585), y)
+     KBUILD_DEFINES += -DSENSOR_SONY_IMX585
+ endif
+@@ -355,4 +359,4 @@ endif
+ 
+ ifeq ($(CONFIG_SENSOR_LONTIUM_LT6911), y)
+     KBUILD_DEFINES += -DSENSOR_LONTIUM_LT6911
+-endif
++endif
+\ No newline at end of file
+diff --git a/v2/sample/common/sample_comm.h b/v2/sample/common/sample_comm.h
+index fe57979e1..4f83ffd99 100644
+--- a/v2/sample/common/sample_comm.h
++++ b/v2/sample/common/sample_comm.h
+@@ -367,6 +367,9 @@ typedef enum _SAMPLE_SNS_TYPE_E {
+ 	SONY_IMX415_MIPI_4M_25FPS_12BIT,
+ 	SONY_IMX415_MIPI_5M_25FPS_12BIT,
+ 	SONY_IMX415_MIPI_8M_25FPS_12BIT,
++	SONY_IMX577_MIPI_12M_20FPS_10BIT,
++	SONY_IMX577_MASTER_MIPI_12M_20FPS_10BIT,
++	SONY_IMX577_SLAVE_MIPI_12M_20FPS_10BIT,
+ 	SONY_IMX585_MIPI_8M_30FPS_12BIT,
+ 	SONY_IMX900_MIPI_3M_70FPS_12BIT_COLOR,
+ 	SONY_IMX900_MIPI_3M_70FPS_12BIT_MONO,
+diff --git a/v2/sample/common/sample_common_isp.c b/v2/sample/common/sample_common_isp.c
+index 38aacb47a..c49772c5a 100644
+--- a/v2/sample/common/sample_common_isp.c
++++ b/v2/sample/common/sample_common_isp.c
+@@ -220,6 +220,9 @@ CVI_S32 SAMPLE_COMM_ISP_GetIspAttrBySns(SAMPLE_SNS_TYPE_E enSnsType, ISP_PUB_ATT
+ 		break;
+ 	case OV_OS04E10_MIPI_4M_30FPS_2L_10BIT_WDR2TO1:
+ 	case OV_OS04E10_SLAVE_MIPI_4M_30FPS_2L_10BIT_WDR2TO1:
++	case SONY_IMX577_MIPI_12M_20FPS_10BIT:
++	case SONY_IMX577_MASTER_MIPI_12M_20FPS_10BIT:
++	case SONY_IMX577_SLAVE_MIPI_12M_20FPS_10BIT:
+ 		pstPubAttr->f32FrameRate = 20;
+ 		break;
+ 	case GCORE_GC2145_MIPI_2M_12FPS_8BIT:
+@@ -293,6 +296,9 @@ CVI_S32 SAMPLE_COMM_ISP_GetIspAttrBySns(SAMPLE_SNS_TYPE_E enSnsType, ISP_PUB_ATT
+ 	case SONY_IMX412_MIPI_12M_30FPS_12BIT:
+ 	case SONY_IMX412_MIPI_12M_30FPS_12BIT_WDR2TO1:
+ 	case SONY_IMX412_MIPI_8M_30FPS_12BIT_WDR2TO1:
++	case SONY_IMX577_MIPI_12M_20FPS_10BIT:
++	case SONY_IMX577_MASTER_MIPI_12M_20FPS_10BIT:
++	case SONY_IMX577_SLAVE_MIPI_12M_20FPS_10BIT:
+ 	case SONY_IMX585_MIPI_8M_30FPS_12BIT:
+ 	case SONY_IMX585_MIPI_8M_25FPS_12BIT_WDR2TO1:
+ 	case SONY_IMX900_MIPI_3M_70FPS_12BIT_COLOR:
+@@ -365,6 +371,7 @@ CVI_S32 SAMPLE_COMM_ISP_GetIspAttrBySns(SAMPLE_SNS_TYPE_E enSnsType, ISP_PUB_ATT
+ 	case OV_OS04E10_SLAVE_MIPI_4M_30FPS_2L_10BIT_WDR2TO1:
+ 	case OV_OV9282_SLAVE_MIPI_800P_15FPS_2L_10BIT:
+ 	case SMS_SC438AI_MIPI_4M_30FPS_10BIT_SLAVE:
++	case SONY_IMX577_SLAVE_MIPI_12M_20FPS_10BIT:
+ 		pstPubAttr->u8EnableMaster = 0;
+ 		break;
+ 	case OV_OS04A10_MASTER_MIPI_4M_1440P_2L_10BIT:
+@@ -373,6 +380,7 @@ CVI_S32 SAMPLE_COMM_ISP_GetIspAttrBySns(SAMPLE_SNS_TYPE_E enSnsType, ISP_PUB_ATT
+ 	case OV_OS04E10_MIPI_4M_30FPS_2L_10BIT_WDR2TO1:
+ 	case OV_OV9282_MASTER_MIPI_800P_15FPS_2L_10BIT:
+ 	case SMS_SC438AI_MIPI_4M_30FPS_10BIT_MASTER:
++	case SONY_IMX577_MASTER_MIPI_12M_20FPS_10BIT:
+ 		pstPubAttr->u8EnableMaster = 1;
+ 		break;
+ 	default:
+@@ -1012,6 +1020,13 @@ CVI_VOID *SAMPLE_COMM_GetSnsObj(SAMPLE_SNS_TYPE_E enSnsType)
+ 		pSnsObj = &stSnsImx415_Obj;
+ 		break;
+ #endif
++#if defined(SENSOR_SONY_IMX577)
++	case SONY_IMX577_MIPI_12M_20FPS_10BIT:
++	case SONY_IMX577_MASTER_MIPI_12M_20FPS_10BIT:
++	case SONY_IMX577_SLAVE_MIPI_12M_20FPS_10BIT:
++		pSnsObj = &stSnsImx577_Obj;
++		break;
++#endif
+ #if defined(SENSOR_SONY_IMX585)
+ 	case SONY_IMX585_MIPI_8M_30FPS_12BIT:
+ 	case SONY_IMX585_MIPI_8M_25FPS_12BIT_WDR2TO1:
+diff --git a/v2/sample/common/sample_common_vi.c b/v2/sample/common/sample_common_vi.c
+index d519ed7b8..80cd6e7c9 100644
+--- a/v2/sample/common/sample_common_vi.c
++++ b/v2/sample/common/sample_common_vi.c
+@@ -433,6 +433,9 @@ CVI_S32 SAMPLE_COMM_VI_GetDevAttrBySns(SAMPLE_SNS_TYPE_E enSnsType, VI_DEV_ATTR_
+ 	case SONY_IMX412_MIPI_12M_30FPS_12BIT:
+ 	case SONY_IMX412_MIPI_12M_30FPS_12BIT_WDR2TO1:
+ 	case SONY_IMX412_MIPI_8M_30FPS_12BIT_WDR2TO1:
++	case SONY_IMX577_MIPI_12M_20FPS_10BIT:
++	case SONY_IMX577_SLAVE_MIPI_12M_20FPS_10BIT:
++	case SONY_IMX577_MASTER_MIPI_12M_20FPS_10BIT:
+ 	case SONY_IMX585_MIPI_8M_30FPS_12BIT:
+ 	case SONY_IMX585_MIPI_8M_25FPS_12BIT_WDR2TO1:
+ 	case SONY_IMX900_MIPI_3M_70FPS_12BIT_COLOR:
+@@ -1254,6 +1257,9 @@ CVI_S32 SAMPLE_COMM_VI_GetSizeBySensor(SAMPLE_SNS_TYPE_E enMode, PIC_SIZE_E *pen
+ 		break;
+ 	case SONY_IMX412_MIPI_12M_30FPS_12BIT:
+ 	case SONY_IMX412_MIPI_12M_30FPS_12BIT_WDR2TO1:
++	case SONY_IMX577_MIPI_12M_20FPS_10BIT:
++	case SONY_IMX577_MASTER_MIPI_12M_20FPS_10BIT:
++	case SONY_IMX577_SLAVE_MIPI_12M_20FPS_10BIT:
+ 		*penSize = PIC_4032x3000;
+ 		break;
+ 	case SONY_IMX412_MIPI_8M_30FPS_12BIT_WDR2TO1:
+@@ -1741,6 +1747,9 @@ static const char *snsr_type_name[SAMPLE_SNS_TYPE_BUTT] = {
+ 	"SONY_IMX415_MIPI_4M_25FPS_12BIT",
+ 	"SONY_IMX415_MIPI_5M_25FPS_12BIT",
+ 	"SONY_IMX415_MIPI_8M_25FPS_12BIT",
++	"SONY_IMX577_MIPI_12M_20FPS_10BIT",
++	"SONY_IMX577_MASTER_MIPI_12M_20FPS_10BIT",
++	"SONY_IMX577_SLAVE_MIPI_12M_20FPS_10BIT",
+ 	"SONY_IMX585_MIPI_8M_30FPS_12BIT",
+ 	"SONY_IMX900_MIPI_3M_70FPS_12BIT_COLOR",
+ 	"SONY_IMX900_MIPI_3M_70FPS_12BIT_MONO",
+-- 
+2.25.1
+

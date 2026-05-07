@@ -1,0 +1,66 @@
+From 053b6256e253faf5a53dcbd1e8899b35d8f37895 Mon Sep 17 00:00:00 2001
+From: "shawn.wu" <shawn.wu@sophgo.com>
+Date: Fri, 11 Jul 2025 08:44:45 +0800
+Subject: [PATCH 4/5] Revert "[fix](i2c):add the example for i2c recovery
+ config"
+
+This reverts commit 96d259d0b76cb3b798616fc459bf82b7b5849c02.
+---
+ boards/default/dts/sophon/soph_base.dtsi | 27 ------------------------
+ 1 file changed, 27 deletions(-)
+
+diff --git a/boards/default/dts/sophon/soph_base.dtsi b/boards/default/dts/sophon/soph_base.dtsi
+index 4f2ab043..fabc0526 100644
+--- a/boards/default/dts/sophon/soph_base.dtsi
++++ b/boards/default/dts/sophon/soph_base.dtsi
+@@ -489,15 +489,6 @@
+ 		#address-cells = <0x1>;
+ 		resets = <&rst RST_I2C0>;
+ 		reset-names = "i2c0";
+-	#if 0
+-		/* pinmux reg config, example. pinmux_base func_val gpio_val */
+-		scl,pinmux = <0x28104C28 0x1 0x3>;	// IIC0_SCL/IIC0_SCL/GPIO96
+-		sda,pinmux = <0x28104C24 0x1 0x3>;	// IIC0_SDA/IIC0_SDA/GPIO95
+-
+-		/* recovery gpio port */
+-		scl-gpios = <&portd 0 GPIO_ACTIVE_HIGH>;
+-		sda-gpios = <&portc 31 GPIO_ACTIVE_HIGH>;
+-	#endif
+ 	};
+ 
+ 	i2c1: i2c@29010000 {
+@@ -510,15 +501,6 @@
+ 		#address-cells = <0x1>;
+ 		resets = <&rst RST_I2C1>;
+ 		reset-names = "i2c1";
+-	#if 1
+-		/* pinmux reg config, example. pinmux_base func_val gpio_val */
+-		scl,pinmux = <0x28104C40 0x1 0x3>;	// IIC1_SCL/IIC1_SCL/GPIO98
+-		sda,pinmux = <0x28104C3C 0x1 0x3>;	// IIC1_SDA/IIC1_SDA/GPIO97
+-
+-		/* recovery gpio port */
+-		scl-gpios = <&portd 2 GPIO_ACTIVE_HIGH>;
+-		sda-gpios = <&portd 1 GPIO_ACTIVE_HIGH>;
+-	#endif
+ 	};
+ 
+ 	i2c2: i2c@29020000 {
+@@ -531,15 +513,6 @@
+ 		#address-cells = <0x1>;
+ 		resets = <&rst RST_I2C2>;
+ 		reset-names = "i2c2";
+-	#if 1
+-		/* pinmux reg config, example. pinmux_base func_val gpio_val */
+-		scl,pinmux = <0x28104C48 0x0 0x3>;	// IIC2_SCL/IIC2_SCL/GPIO100
+-		sda,pinmux = <0x28104C44 0x0 0x3>;	// IIC2_SDA/IIC2_SDA/GPIO99
+-
+-		/* recovery gpio port */
+-		scl-gpios = <&portd 4 GPIO_ACTIVE_HIGH>;
+-		sda-gpios = <&portd 3 GPIO_ACTIVE_HIGH>;
+-	#endif
+ 	};
+ 
+ 	i2c3: i2c@29030000 {
+-- 
+2.25.1
+

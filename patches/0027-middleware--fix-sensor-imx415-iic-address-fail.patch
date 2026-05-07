@@ -1,0 +1,26 @@
+From efe1354e6d9a0b52e746801e5851bd2cd41eed3f Mon Sep 17 00:00:00 2001
+From: "shawn.wu" <shawn.wu@sophgo.com>
+Date: Wed, 2 Jul 2025 10:09:21 +0800
+Subject: [PATCH 5/7] [fix](sensor):imx415 iic address fail
+
+Change-Id: I85fd67b95a91ffd12def5b16f7646096b40dddd4
+---
+ v1/component/isp/sensor/cv182x/sony_imx415/imx415_cmos_ex.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/v1/component/isp/sensor/cv182x/sony_imx415/imx415_cmos_ex.h b/v1/component/isp/sensor/cv182x/sony_imx415/imx415_cmos_ex.h
+index bbfa63f34..b89388864 100755
+--- a/v1/component/isp/sensor/cv182x/sony_imx415/imx415_cmos_ex.h
++++ b/v1/component/isp/sensor/cv182x/sony_imx415/imx415_cmos_ex.h
+@@ -18,7 +18,7 @@ extern "C" {
+ #include "cvi_sns_ctrl.h"
+ 
+ #define IMX415_I2C_ADDR_1 0x1a
+-#define IMX415_I2C_ADDR_2 0x7f
++#define IMX415_I2C_ADDR_2 0x36
+ 
+ enum imx415_linear_regs_e {
+ 	LINEAR_SHR_L = 0,
+-- 
+2.25.1
+

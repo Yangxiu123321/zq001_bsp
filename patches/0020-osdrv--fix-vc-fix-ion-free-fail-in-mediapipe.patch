@@ -1,0 +1,170 @@
+From 5a4818c84c20efb006e19302af3986a9538dff71 Mon Sep 17 00:00:00 2001
+From: "weitao.hu" <weitao.hu@sophgo.com>
+Date: Tue, 8 Apr 2025 15:35:19 +0800
+Subject: [PATCH 11/11] [fix](vc):fix ion free fail in mediapipe
+
+[description ]:
+	In bind mode,bs buffer and header buffer is allocated in _venc_event_handler,
+	so it should be released in this thread.Ion should be released by the thread
+	that allocated it; it cannot be released across kernel threads.
+[root cause  ]: NA
+[jira id     ]: NA
+[chip project]: athena2
+[side effects]: NA
+[Affected]: NA
+
+Change-Id: I29a1f4fbd5ce6f6b0f060caf8a142e5213edf0e0
+---
+ .../v2/vc_drv/module/include/h265_interface.h |  2 +
+ interdrv/v2/vc_drv/module/src/venc.c          | 47 ++++++++++++-------
+ interdrv/v2/vc_drv/module/src/venc_api.c      | 25 +++++++++-
+ 3 files changed, 55 insertions(+), 19 deletions(-)
+
+diff --git a/interdrv/v2/vc_drv/module/include/h265_interface.h b/interdrv/v2/vc_drv/module/include/h265_interface.h
+index 7426f88961..3f4d025cdf 100644
+--- a/interdrv/v2/vc_drv/module/include/h265_interface.h
++++ b/interdrv/v2/vc_drv/module/include/h265_interface.h
+@@ -614,6 +614,7 @@ enum H26X_OP_NUM {
+     H26X_OP_GET_SEARCH_WINDOW,
+     H26X_OP_SET_EXTERN_BS_BUF,
+     H26X_OP_GET_BS_PACKS_NUM,
++    H26X_OP_RELEASE_HEADER,
+     H26X_OP_MAX,
+ };
+ 
+@@ -672,6 +673,7 @@ typedef enum _VEncIoctlOp_ {
+     DRV_H26X_OP_GET_SEARCH_WINDOW       = (H26X_OP_GET_SEARCH_WINDOW << DRV_H26X_OP_SHIFT),
+     DRV_H26X_OP_SET_EXTERN_BS_BUF       = (H26X_OP_SET_EXTERN_BS_BUF << DRV_H26X_OP_SHIFT),
+     DRV_H26X_OP_GET_BS_PACKS_NUM        = (H26X_OP_GET_BS_PACKS_NUM << DRV_H26X_OP_SHIFT),
++    DRV_H26X_OP_RELEASE_HEADER          = (H26X_OP_RELEASE_HEADER << DRV_H26X_OP_SHIFT),
+     DRV_H26X_OP_MAX                     = (H26X_OP_MAX << DRV_H26X_OP_SHIFT),
+ } VEncIoctlOp;
+ 
+diff --git a/interdrv/v2/vc_drv/module/src/venc.c b/interdrv/v2/vc_drv/module/src/venc.c
+index 0e45c2a957..e259d500ea 100644
+--- a/interdrv/v2/vc_drv/module/src/venc.c
++++ b/interdrv/v2/vc_drv/module/src/venc.c
+@@ -468,6 +468,16 @@ static int _venc_event_handler(void *data)
+         cond_resched();
+     }
+ 
++    /*
++        ION cannot be released in two processes
++        In bind mode, stream header is alocated in `_venc_event_handler`,
++        so it can only be released when this process exits.
++    */
++    s32Ret = pEncCtx->base.ioctl(pEncCtx, DRV_H26X_OP_RELEASE_HEADER, NULL);
++    if(s32Ret != 0) {
++        DRV_VENC_ERR("DRV_H26X_OP_RELEASE_HEADER failed\n");
++    }
++
+     DRV_VENC_INFO("------------end\n");
+     #ifdef DUMP_BIND_YUV
+     fclose(out_f);
+@@ -3208,7 +3218,23 @@ int drv_venc_start_recvframe(venc_chn VeChn,
+         DRV_VENC_ERR("_drv_set_cupred_impl\n");
+         return s32Ret;
+     }
+-
++    s32Ret = bind_get_src(&chn, &stBindSrc);
++    DRV_VENC_DBG("get bind src, ret:%d\n", s32Ret);
++    if (s32Ret == 0) {
++        if (pEncCtx->base.ioctl) {
++            if (pChnHandle->pChnAttr->stVencAttr.enType == PT_H265 ||
++                pChnHandle->pChnAttr->stVencAttr.enType == PT_H264) {
++                isBindMode = TRUE;
++                s32Ret = pEncCtx->base.ioctl(pEncCtx, DRV_H26X_OP_SET_BIND_MODE, (void *)&isBindMode);
++                if (s32Ret != 0) {
++                    DRV_VENC_ERR("DRV_H26X_OP_SET_BIND_MODE, %d\n", s32Ret);
++                    return -1;
++                }
++            }
++        }
++        pVbCtx->currBindMode = 1;
++        pChnHandle->bChnEnable = 1;
++    }
+     if (pEncCtx->base.ioctl) {
+         if (pChnHandle->pChnAttr->stVencAttr.enType == PT_H265 ||
+             pChnHandle->pChnAttr->stVencAttr.enType == PT_H264) {
+@@ -3234,26 +3260,11 @@ int drv_venc_start_recvframe(venc_chn VeChn,
+     pChnVars->chnState = venc_chn_STATE_START_ENC;
+     handle->chn_status[VeChn] = venc_chn_STATE_START_ENC;
+ 
+-    s32Ret = bind_get_src(&chn, &stBindSrc);
+-    DRV_VENC_DBG("get bind src, ret:%d\n", s32Ret);
+-    if (s32Ret == 0) {
++
++    if (pVbCtx->currBindMode == 1) {
+         // struct sched_param param = {
+         //     .sched_priority = 95,
+         // };
+-        if (pEncCtx->base.ioctl) {
+-            if (pChnHandle->pChnAttr->stVencAttr.enType == PT_H265 ||
+-                pChnHandle->pChnAttr->stVencAttr.enType == PT_H264) {
+-                isBindMode = TRUE;
+-                s32Ret = pEncCtx->base.ioctl(pEncCtx, DRV_H26X_OP_SET_BIND_MODE, (void *)&isBindMode);
+-                if (s32Ret != 0) {
+-                    DRV_VENC_ERR("DRV_H26X_OP_SET_BIND_MODE, %d\n", s32Ret);
+-                    return -1;
+-                }
+-            }
+-        }
+-
+-        pVbCtx->currBindMode = 1;
+-        pChnHandle->bChnEnable = 1;
+         if (!pVbCtx->thread) {
+             pVbCtx->thread = kthread_run(_venc_event_handler,
+                             (void *)pChnHandle,
+diff --git a/interdrv/v2/vc_drv/module/src/venc_api.c b/interdrv/v2/vc_drv/module/src/venc_api.c
+index 9ae03d2d2a..aa7545830c 100644
+--- a/interdrv/v2/vc_drv/module/src/venc_api.c
++++ b/interdrv/v2/vc_drv/module/src/venc_api.c
+@@ -2017,7 +2017,12 @@ int venc_op_start(void *handle, void *arg)
+ 
+         // additional is for store header and header_backup
+         pst_handle->free_stream_buffer = Queue_Create_With_Lock(pst_handle->min_src_frame_count, sizeof(PhysicalAddress));
+-
++        if(pst_handle->is_bind_mode == TRUE) {
++            ret = alloc_bitstream_buf(pst_handle);
++            if (ret) {
++                goto ERR_VPU_ENC_OPEN;
++            }
++        }
+         if (pst_handle->enable_ext_rc == 1) {
+             // pst_handle->open_param.RcEn = 1;
+             venc_rc_open(&pst_handle->rc_info, &pst_handle->open_param);
+@@ -2687,6 +2692,23 @@ int venc_op_get_bs_packs_num(void *handle, void *arg)
+     return 0;
+ }
+ 
++
++int venc_op_release_header(void *handle, void *arg)
++{
++    ENCODER_HANDLE *pst_handle = handle;
++    if (pst_handle->header_cache_pack.len > 0 && pst_handle->header_cache_pack.u64PhyAddr) {
++        vpu_buffer_t header_vb_buffer;
++        header_vb_buffer.phys_addr = pst_handle->header_cache_pack.u64PhyAddr;
++        header_vb_buffer.size = VENC_HEADER_BUF_SIZE;
++        vdi_free_dma_memory(pst_handle->core_idx, &header_vb_buffer, 0, 0);
++        memset(&pst_handle->header_cache_pack, 0, sizeof(stPack));
++        return 0;
++    } else {
++        VLOG(ERR, "release header failed\n");
++        return -1;
++    }
++}
++
+ typedef struct _DRV_VENC_IOCTL_OP_ {
+     int opNum;
+     int (*ioctlFunc)(void *handle, void *arg);
+@@ -2746,6 +2768,7 @@ DRV_VENC_IOCTL_OP IoctlOp[] = {
+     { DRV_H26X_OP_GET_SEARCH_WINDOW, venc_op_get_search_window},
+     { DRV_H26X_OP_SET_EXTERN_BS_BUF, venc_op_set_extern_bs_buf},
+     { DRV_H26X_OP_GET_BS_PACKS_NUM, venc_op_get_bs_packs_num},
++    { DRV_H26X_OP_RELEASE_HEADER, venc_op_release_header},
+ };
+ 
+ int internal_venc_ioctl(void *handle, int op, void *arg)
+-- 
+2.25.1
+

@@ -1,0 +1,60 @@
+From fe7667867de51626d46a571f7ea70c0bcc918685 Mon Sep 17 00:00:00 2001
+From: "zunshi.liu" <zunshi.liu@sophgo.com>
+Date: Thu, 13 Mar 2025 17:07:37 +0800
+Subject: [PATCH 08/11] support simultaneous use of edge side and end side VPSS
+
+Change-Id: I9515295716e548344f428466e8ca26a13a31c2ce
+---
+ interdrv/v2/vpss/common/vpss.c | 8 ++------
+ 1 file changed, 2 insertions(+), 6 deletions(-)
+
+diff --git a/interdrv/v2/vpss/common/vpss.c b/interdrv/v2/vpss/common/vpss.c
+index 6e16f32bca..556868d421 100644
+--- a/interdrv/v2/vpss/common/vpss.c
++++ b/interdrv/v2/vpss/common/vpss.c
+@@ -82,8 +82,6 @@ static struct vpss_ext_ctx g_vpss_ext_ctx[VPSS_MAX_GRP_NUM];
+ 
+ static struct vpss_jobs_ctx g_vpss_vb_jobs[VPSS_MAX_GRP_NUM];
+ 
+-static unsigned char g_is_bm_scene = false;
+-
+ // Motion level for vcodec
+ static struct mlv_i_s g_mlv_i[VI_MAX_DEV_NUM];
+ 
+@@ -171,7 +169,7 @@ void vpss_wkup_frame_done_handle(void *pdata)
+ {
+ 	struct vpss_job *job = container_of(pdata, struct vpss_job, data);
+ 
+-	if(!g_is_bm_scene)
++	if(!job->cfg.grp_cfg.bm_scene)
+ 		queue_work(g_vpss_workqueue, &job->job_work);
+ 	else {
+ 		struct vpss_stitch_data *data = (struct vpss_stitch_data *)job->data;
+@@ -1224,6 +1222,7 @@ static signed int commit_hw_settings(struct vpss_ctx *ctx)
+ 	hw_grp_cfg->fbd_enable = (vb_in != NULL)
+ 				? (vb_in->buf.compress_mode == COMPRESS_MODE_FRAME) : false;
+ 	hw_grp_cfg->upsample = false;
++	hw_grp_cfg->bm_scene = false;
+ 
+ 	for (chn_id = 0; chn_id < VPSS_MAX_CHN_NUM; ++chn_id) {
+ 		chn_cfg = &ctx->chn_cfgs[chn_id];
+@@ -2246,7 +2245,6 @@ signed int vpss_create_grp(vpss_grp grp_id, const vpss_grp_attr_s *grp_attr)
+ 	_vpss_grp_raram_init(grp_id);
+ 	mutex_lock(&g_vpss_lock);
+ 	g_vpss_grp_used[grp_id] = true;
+-	if(g_is_bm_scene) g_is_bm_scene = false;
+ 	mutex_unlock(&g_vpss_lock);
+ 
+ 	TRACE_VPSS(DBG_INFO, "Grp(%d) max_w(%d) max_h(%d) PixelFmt(%d) online_from_isp(%d)\n",
+@@ -4275,8 +4273,6 @@ signed int vpss_bm_send_frame(bm_vpss_cfg *vpss_cfg){
+ 	struct vpss_hal_chn_cfg *chn_hw_cfg = &job->cfg.chn_cfg[0];
+ 	struct vpss_stitch_data data;
+ 
+-	if(!g_is_bm_scene) g_is_bm_scene = true;
+-
+ 	init_waitqueue_head(&data.wait);
+ 	data.flag = 0;
+ 
+-- 
+2.25.1
+

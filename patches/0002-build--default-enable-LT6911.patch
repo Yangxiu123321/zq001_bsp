@@ -1,0 +1,25 @@
+From 7cc33008fea0dae5fc3cad157e3ffcec56c3ada3 Mon Sep 17 00:00:00 2001
+From: "shawn.wu" <shawn.wu@sophgo.com>
+Date: Tue, 3 Jun 2025 13:55:09 +0800
+Subject: [PATCH 2/5] default enable LT6911
+
+Change-Id: If5103614d2d4c9b035a90c70cc72ce808188fe0c
+---
+ boards/sophon/device_wevb_emmc/device_wevb_emmc_defconfig | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/boards/sophon/device_wevb_emmc/device_wevb_emmc_defconfig b/boards/sophon/device_wevb_emmc/device_wevb_emmc_defconfig
+index f3d7ec01..0c3c3f90 100644
+--- a/boards/sophon/device_wevb_emmc/device_wevb_emmc_defconfig
++++ b/boards/sophon/device_wevb_emmc/device_wevb_emmc_defconfig
+@@ -34,6 +34,7 @@ CONFIG_SENSOR_SMS_SC4336P=y
+ CONFIG_SENSOR_SMS_SC4336P_SLAVE=y
+ CONFIG_SENSOR_NUC_NC021=y
+ CONFIG_SENSOR_PIXELPLUS_PR2100=y
++CONFIG_SENSOR_LONTIUM_LT6911=y
+ CONFIG_UBOOT_2021_10=y
+ CONFIG_KERNEL_SRC_5.10=y
+ CONFIG_KERNEL_LZMA=y
+-- 
+2.25.1
+

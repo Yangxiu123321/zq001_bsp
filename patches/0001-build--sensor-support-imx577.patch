@@ -1,0 +1,38 @@
+From e64dcd78f336d810006d93bf8d21e76db9d7502d Mon Sep 17 00:00:00 2001
+From: "shihuai.zhang" <shihuai.zhang@sophgo.com>
+Date: Thu, 16 Jan 2025 11:19:15 +0800
+Subject: [PATCH 1/5] (sensor): support imx577
+
+Change-Id: I6da29f98fc0f4d4fd149f3db4d3f1ce3915932a2
+---
+ boards/sophon/device_wevb_emmc/device_wevb_emmc_defconfig | 1 +
+ sensors/sensor_list.json                                  | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/boards/sophon/device_wevb_emmc/device_wevb_emmc_defconfig b/boards/sophon/device_wevb_emmc/device_wevb_emmc_defconfig
+index f63171e3..f3d7ec01 100644
+--- a/boards/sophon/device_wevb_emmc/device_wevb_emmc_defconfig
++++ b/boards/sophon/device_wevb_emmc/device_wevb_emmc_defconfig
+@@ -21,6 +21,7 @@ CONFIG_SENSOR_SONY_IMX327_2L=y
+ CONFIG_SENSOR_SONY_IMX327_SLAVE=y
+ CONFIG_SENSOR_SONY_IMX412=y
+ CONFIG_SENSOR_SONY_IMX415=y
++CONFIG_SENSOR_SONY_IMX577=y
+ CONFIG_SENSOR_SONY_IMX585=y
+ CONFIG_SENSOR_SONY_IMX900=y
+ CONFIG_SENSOR_ONSEMI_AR2020=y
+diff --git a/sensors/sensor_list.json b/sensors/sensor_list.json
+index 3ac18e75..0c135fae 100644
+--- a/sensors/sensor_list.json
++++ b/sensors/sensor_list.json
+@@ -81,6 +81,7 @@
+ 		"SONY_IMX385",
+ 		"SONY_IMX412",
+ 		"SONY_IMX415",
++		"SONY_IMX577",
+ 		"SONY_IMX585",
+ 		"SONY_IMX900",
+ 		"TECHPOINT_TP2825",
+-- 
+2.25.1
+

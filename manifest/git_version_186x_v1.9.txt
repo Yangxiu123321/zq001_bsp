@@ -1,0 +1,47 @@
+project_name: cvi_rtsp
+commit_id: 5933c7f2c225913ebb8093ca2ba0b3e318c18ae5
+
+project_name: tdl_sdk
+commit_id: 992d97ff3d849157b719474a6380f248e9551781
+
+project_name: isp
+commit_id: f39ff443dc9b9d890b5b1fb2ca8936c250f41fd3
+
+project_name: fsbl
+commit_id: cd8db688d098bd392572f8dd5a384cf1d92812fe
+
+project_name: u-boot-2021.10
+commit_id: 115daf4ae47fe08a145e464bd0c395251515fb62
+
+project_name: linux_5.10
+commit_id: ac0a8f57a952458ddb19e0bd8773742093468384
+
+project_name: ramdisk
+commit_id: c3b88be141cebc81cfc36b026c010a94d802ec18
+
+project_name: oss
+commit_id: 48f06b542f2639fe21237830c852fa5080efa176
+
+project_name: build
+commit_id: 10d22db99b43e70696928972dd30c0b615de6983
+
+project_name: isp_tuning
+commit_id: 0cb1cbb977774e63b79070e04b71055299f1b079
+
+project_name: libsophon
+commit_id: 84364cc8f388558138aba5b183ce1bd704317bd0
+
+project_name: libsophav
+commit_id: 7b869edbe0ccd815f3dba1a6afd8b647268cb37f
+
+project_name: middleware
+commit_id: e3be19f818e2a650e868e6d5c043bf2809486796
+
+project_name: sophliteos
+commit_id: d59605495ce112235ecd2efab8dd969e2b8fc02a
+
+project_name: sophon_media
+commit_id: a94743b9edbd1256d21c814617a8c2202e4b4e6c
+
+project_name: osdrv
+commit_id: 163bbd580c73e726b74bbcdd60c0ba02fd24a0db

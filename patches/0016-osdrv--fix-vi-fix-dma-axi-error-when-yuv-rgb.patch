@@ -1,0 +1,63 @@
+From 2b785f77ecd34c8e02fd8dcc630699838ae180b5 Mon Sep 17 00:00:00 2001
+From: "shawn.wu" <shawn.wu@sophgo.com>
+Date: Mon, 22 Sep 2025 10:12:14 +0800
+Subject: [PATCH 07/11] [fix][vi]fix dma axi error when yuv + rgb
+
+1. When an overflow occurs in YUV processing,
+the first frame flag of the RGB channel is incorrectly
+reset, resulting in an abnormal DMA state.
+2. When overflow or size error happend in the
+FE BE offline mode, only the CSI needs to be reset.
+
+Change-Id: I3b70502cfe53c51a339736fe88a5266c85c38146
+---
+ interdrv/v2/vi/chip/soph/vi.c | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/interdrv/v2/vi/chip/soph/vi.c b/interdrv/v2/vi/chip/soph/vi.c
+index bb5cc49e94..60626804e4 100644
+--- a/interdrv/v2/vi/chip/soph/vi.c
++++ b/interdrv/v2/vi/chip/soph/vi.c
+@@ -6884,6 +6884,7 @@ static long _vi_s_ctrl(struct sop_vi_dev *vdev, struct vi_ext_control *p)
+ 		struct resize_yuv_path_cfg_s cfg;
+ 		u8 dev_num;
+ 		int j, ViPipe;
++		unsigned long flags;
+ 
+ 		vi_pr(VI_INFO, "Start resize YUV path\n");
+ 
+@@ -6956,6 +6957,10 @@ static long _vi_s_ctrl(struct sop_vi_dev *vdev, struct vi_ext_control *p)
+ 			ispblk_csibdg_yuv_bypass_config(ctx, ViPipe);
+ 			ctx->isp_pipe_enable[ViPipe] = true;
+ 			for (j = 0; j < ctx->isp_pipe_cfg[ViPipe].mux_mode + 1; j++) {
++				spin_lock_irqsave(&vdev->qbuf_lock, flags);
++				++vdev->qbuf_num[ViPipe][j];
++				spin_unlock_irqrestore(&vdev->qbuf_lock, flags);
++
+ 				_isp_yuv_bypass_trigger(vdev, ViPipe, j);
+ 			}
+ 			rc = 0;
+@@ -8508,7 +8513,7 @@ void _vi_size_err_handler(struct sop_vi_dev *vdev, const enum sop_isp_raw err_ra
+ 	isp_frm_err_handler(ctx, err_raw_num, 5);
+ 
+ 	//step 4 : reset first frame count
+-	vdev->ctx.isp_pipe_cfg[err_raw_num].first_frm_cnt = 0;
++	// vdev->ctx.isp_pipe_cfg[err_raw_num].first_frm_cnt = 0;
+ 
+ 	//Let postraw trigger go
+ 	atomic_set(&vdev->isp_err_handle_flag, 0);
+@@ -8707,7 +8712,10 @@ static int _vi_err_handler_thread(void *arg)
+ 		if (atomic_read(&vdev->isp_error_type[err_raw_num]) == ISP_SIZE_ERROR) {
+ 			_vi_size_err_handler(vdev, err_raw_num);
+ 		} else if (atomic_read(&vdev->isp_error_type[err_raw_num]) == ISP_OVERFLOW) {
+-			_vi_overflow_handler(vdev, err_raw_num);
++			if (_is_be_post_online(&vdev->ctx))
++				_vi_size_err_handler(vdev, err_raw_num);
++			else
++				_vi_overflow_handler(vdev, err_raw_num);
+ 		} else {
+ 			vi_pr(VI_ERR, "err_handler unknown error\n");
+ 		}
+-- 
+2.25.1
+

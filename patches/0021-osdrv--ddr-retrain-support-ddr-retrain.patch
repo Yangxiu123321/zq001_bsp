@@ -1,0 +1,645 @@
+From 762285ce6480139f39670e7486102630a505d9e1 Mon Sep 17 00:00:00 2001
+From: "xiaole.chen" <xiaole.chen@sophgo.com>
+Date: Thu, 18 Sep 2025 15:21:53 +0800
+Subject: [PATCH] [ddr retrain] support ddr retrain
+
+Change-Id: Iff37736948d2251b1b0f897ce66172403fc7a75d
+---
+ interdrv/v2/include/common/kapi/vi_cb.h |   7 +
+ interdrv/v2/include/common/kapi/vo_cb.h |   7 +
+ interdrv/v2/vi/chip/soph/vi.c           | 181 ++++++++++++++++++------
+ interdrv/v2/vi/chip/soph/vi_defines.h   |  17 ++-
+ interdrv/v2/vo/chip/soph/disp.c         |  10 +-
+ interdrv/v2/vo/chip/soph/vo.c           |  80 ++++++++++-
+ interdrv/v2/vo/chip/soph/vo_core.c      |   2 +-
+ interdrv/v2/vo/chip/soph/vo_defines.h   |  11 ++
+ 8 files changed, 265 insertions(+), 50 deletions(-)
+
+diff --git a/interdrv/v2/include/common/kapi/vi_cb.h b/interdrv/v2/include/common/kapi/vi_cb.h
+index d4c1ef27ee..f94578469e 100644
+--- a/interdrv/v2/include/common/kapi/vi_cb.h
++++ b/interdrv/v2/include/common/kapi/vi_cb.h
+@@ -10,6 +10,7 @@ enum VI_CB_CMD {
+ 	VI_CB_QBUF_TRIGGER,
+ 	VI_CB_SC_FRM_DONE,
+ 	VI_CB_SET_VIVPSSMODE,
++	VI_CB_GET_RETRAIN_INFO,
+ 	VI_CB_GDC_OP_DONE = LDC_CB_GDC_OP_DONE,
+ 	VI_CB_MAX
+ };
+@@ -19,6 +20,12 @@ struct vi_vpss_online {
+ 	__u8   is_vpss_online;
+ };
+ 
++struct vi_retrain_info {
++	bool is_vi_en;
++	u64 max_cur_eof;
++	u64 min_next_sof;
++};
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/interdrv/v2/include/common/kapi/vo_cb.h b/interdrv/v2/include/common/kapi/vo_cb.h
+index b6c91008fc..3a4e90cdc6 100644
+--- a/interdrv/v2/include/common/kapi/vo_cb.h
++++ b/interdrv/v2/include/common/kapi/vo_cb.h
+@@ -15,6 +15,7 @@ enum vo_cb_cmd {
+ 	VO_CB_GET_CHN_SIZE,
+ 	VO_CB_QBUF_TRIGGER,
+ 	VO_CB_QBUF_VO_GET_CHN_ROTATION,
++	VO_CB_GET_RETRAIN_INFO,
+ 	VO_CB_GDC_OP_DONE = LDC_CB_GDC_OP_DONE,
+ 	VO_CB_MAX
+ };
+@@ -25,6 +26,12 @@ struct vo_get_chnrotation_cfg {
+ 	u8 rotation;
+ };
+ 
++struct vo_retrain_info {
++	bool is_vo_en;
++	u64 frame_end;
++	u64 margin;
++};
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/interdrv/v2/vi/chip/soph/vi.c b/interdrv/v2/vi/chip/soph/vi.c
+index 60626804e4..3d99c341b6 100644
+--- a/interdrv/v2/vi/chip/soph/vi.c
++++ b/interdrv/v2/vi/chip/soph/vi.c
+@@ -11,6 +11,7 @@
+ #include <vpss_cb.h>
+ #include <vi_cb.h>
+ #include <ldc_cb.h>
++#include <vo_cb.h>
+ #include <vb.h>
+ #include <vip/vi_perf_chk.h>
+ #include <vi_raw_dump.h>
+@@ -42,6 +43,11 @@
+ #define VI_MAX_LIST_NUM		(0x80)
+ #define VI_CMDQ_BUF_SIZE	(0x20000)
+ #define VI_DDR_RETRAIN_REG	(0x281000f4)
++#define VI_GP_RETRAIN_REG	(0x281000f8)
++#define DDR_RETRAIN_GP_TRIGGER_BIT   BIT(16)
++#define DDR_RETRAIN_REG_MODE_MASK    (0xFU)
++#define DDR_RETRAIN_SAFETY_MARGIN_US (150)
++
+ /* In practical application, it is necessary to drop the frame of AE convergence process.
+  * But in vi-vpss online & vpss-vc sbm scenario, there is no way to drop the frame.
+  * Use cover with black to avoid this problem.
+@@ -138,11 +144,48 @@ static int64_t _mempool_pop(u32 size)
+ 	return addr;
+ }
+ 
++static int _vi_call_cb(u32 m_id, u32 cmd_id, void *data)
++{
++	struct base_exe_m_cb exe_cb;
++
++	exe_cb.callee = m_id;
++	exe_cb.caller = E_MODULE_VI;
++	exe_cb.cmd_id = cmd_id;
++	exe_cb.data   = (void *)data;
++
++	return base_exe_module_cb(&exe_cb);
++}
++
++static void update_record_info(struct sop_vi_dev *vdev, enum sop_isp_raw raw_num, bool is_sof)
++{
++	struct record_info *record_info = &vdev->retrain.record_info[raw_num];
++	struct timespec64 cur_ts64 = ktime_to_timespec64(ktime_get());
++	u64 ts = timespec64_to_ns(&cur_ts64) / 1000;
++
++	if (is_sof) {
++		record_info->period_ts = ts - record_info->last_sof_ts;
++		record_info->last_sof_ts = ts;
++		record_info->next_sof_ts = ts + record_info->period_ts;
++		return;
++	}
++
++	//means eof
++	record_info->last_eof_ts = ts;
++	vdev->retrain.max_cur_eof = ts;
++
++	vi_pr(VI_DBG, "raw_num(%d), last_sof(%lld), last_eof_ts(%lld), unblanking(%lld) next_sof(%lld), blanking(%lld)",
++			raw_num, record_info->last_sof_ts, record_info->last_eof_ts,
++			record_info->last_eof_ts - record_info->last_sof_ts, record_info->next_sof_ts,
++			record_info->next_sof_ts - record_info->last_eof_ts);
++}
++
+ static bool ddr_need_retrain(struct sop_vi_dev *vdev)
+ {
+ 	enum sop_isp_raw raw_num = ISP_PRERAW0;
++	struct ddr_retrain *retrain = &vdev->retrain;
++
+ 	if(!vdev->ctx.isp_pipe_cfg[raw_num].is_raw_replay_fe && !vdev->ctx.isp_pipe_cfg[raw_num].is_raw_replay_be) {
+-		if (ioread32(vdev->ddr_retrain_reg) & BIT(8)) {
++		if (ioread32(retrain->ddr_reg) & 0xF) {
+ 			return true;
+ 		}
+ 	}
+@@ -150,6 +193,54 @@ static bool ddr_need_retrain(struct sop_vi_dev *vdev)
+ 	return false;
+ }
+ 
++static void ddr_try_retrain(struct sop_vi_dev *vdev)
++{
++	enum sop_isp_raw raw_num;
++	struct record_info *rec = NULL;
++	struct ddr_retrain *retrain = &vdev->retrain;
++	struct vo_retrain_info vo_info = {0};
++	struct timespec64 cur_ts64 = ktime_to_timespec64(ktime_get());
++	u64 cur_ts = timespec64_to_ns(&cur_ts64) / NSEC_PER_USEC;
++	u64 min_sof_ts = __UINT64_MAX__;
++	int rc = 0;
++	bool is_blanking = false;
++
++	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
++		if (!vdev->ctx.isp_pipe_enable[raw_num])
++			continue;
++
++		rec = &retrain->record_info[raw_num];
++		//means not in blanking
++		if (rec->last_eof_ts < rec->last_sof_ts)
++			return;
++
++		min_sof_ts = min(min_sof_ts, rec->next_sof_ts);
++	}
++
++	retrain->min_next_sof = min_sof_ts;
++
++	rc = _vi_call_cb(E_MODULE_VO, VO_CB_GET_RETRAIN_INFO, &vo_info);
++	if (rc) {
++		vi_pr(VI_INFO, "fail to cb VO_CB_GET_RETRAIN_INFO, rc(%d)", rc);
++	}
++
++	if (vo_info.is_vo_en && (cur_ts >= vo_info.frame_end + vo_info.margin)) {
++		vi_pr(VI_DBG, "cur_ts(%lld), frame_end(%lld), margin(%lld)",
++				cur_ts, vo_info.frame_end, vo_info.margin);
++		return;
++	}
++
++	is_blanking = cur_ts > retrain->max_cur_eof &&
++			cur_ts < (min_sof_ts - DDR_RETRAIN_SAFETY_MARGIN_US);
++	if (is_blanking) {
++		iowrite32(ioread32(retrain->gp_reg) | DDR_RETRAIN_GP_TRIGGER_BIT, retrain->gp_reg);
++		iowrite32(ioread32(retrain->ddr_reg) & ~DDR_RETRAIN_REG_MODE_MASK, retrain->ddr_reg);
++		vi_pr(VI_INFO, "ddr_retrain cur_ts(%lld), max_cur_eof(%lld), min_nex_sof(%lld)",
++				cur_ts, retrain->max_cur_eof, retrain->min_next_sof);
++	}
++}
++
++#if 0
+ static bool _isp_yuv_bypass_check_stop_input(struct sop_vi_dev *vdev, enum sop_isp_raw raw_num,
+ 		enum sop_isp_fe_chn_num chn_num)
+ {
+@@ -182,7 +273,7 @@ static void trig_8051_if_pre_idle(struct sop_vi_dev *vdev)
+ 	enum sop_isp_fe_chn_num fe_chn;
+ 	enum sop_isp_raw raw_num;
+ 	enum isp_splt_num_e splt_num;
+-	u32 ddr_retrain = 0;
++	u32 val = 0;
+ 
+ 	for (splt_num = ISP_SPLT0; splt_num < ISP_SPLT_MAX; splt_num++) {
+ 		if ((atomic_read(&vdev->splt_state[splt_num][ISP_SPLT_CHN0]) != ISP_STATE_IDLE) ||
+@@ -207,11 +298,12 @@ static void trig_8051_if_pre_idle(struct sop_vi_dev *vdev)
+ 	}
+ 
+ 	/*if fe and splt idle trig 8051 retrain*/
+-	ddr_retrain = ioread32(vdev->ddr_retrain_reg);
+-	iowrite32(ddr_retrain | BIT(9), vdev->ddr_retrain_reg);
++	val = ioread32(vdev->retrain.ddr_reg);
++	iowrite32(val | BIT(9), vdev->retrain.ddr_reg);
+ 
+-	vi_pr(VI_WARN, "call ddr retrain now 0x%x\n", ioread32(vdev->ddr_retrain_reg));
++	vi_pr(VI_WARN, "call ddr retrain now 0x%x\n", ioread32(vdev->retrain.ddr_reg));
+ }
++#endif
+ 
+ /**
+  * try to trigger preraw and linespliter after postraw done or drop frame done
+@@ -2255,7 +2347,7 @@ static u32 _is_drop_next_frame(
+ 		if ((start_drop_num != 0) && (frm_num >= start_drop_num) && (frm_num < end_drop_num))
+ 			return 1;
+ 
+-		if (ddr_need_retrain(vdev))
++		if (ddr_need_retrain(vdev) && ctx->isp_pipe_cfg[raw_num].is_tile)
+ 			return 1;
+ 	}
+ 
+@@ -2735,18 +2827,6 @@ int vi_dqbuf(struct _vi_buffer *b)
+ 	return ret;
+ }
+ 
+-static int _vi_call_cb(u32 m_id, u32 cmd_id, void *data)
+-{
+-	struct base_exe_m_cb exe_cb;
+-
+-	exe_cb.callee = m_id;
+-	exe_cb.caller = E_MODULE_VI;
+-	exe_cb.cmd_id = cmd_id;
+-	exe_cb.data   = (void *)data;
+-
+-	return base_exe_module_cb(&exe_cb);
+-}
+-
+ static void vi_init(void)
+ {
+ 	int i, j;
+@@ -2817,12 +2897,6 @@ static void _isp_yuv_bypass_trigger(struct sop_vi_dev *vdev, const enum sop_isp_
+ 		return;
+ 	}
+ 
+-	if (ddr_need_retrain(vdev)) {
+-		ctx->isp_pipe_cfg[raw_num].is_drop_next_frame = true;
+-		trig_8051_if_pre_idle(vdev);
+-		return;
+-	}
+-
+ 	if (atomic_read(&vdev->isp_streamoff) == 0) {
+ 		if (atomic_cmpxchg(&vdev->pre_fe_state[raw_num][hw_chn_num],
+ 					ISP_STATE_IDLE, ISP_STATE_RUNNING) ==
+@@ -4806,9 +4880,7 @@ s8 _pre_hw_enque(
+ 	}
+ 
+ 	if (ddr_need_retrain(vdev)) {
+-		ctx->isp_pipe_cfg[raw_num].is_drop_next_frame = true;
+-		trig_8051_if_pre_idle(vdev);
+-		return -ISP_DROP_FRM;
++		ddr_try_retrain(vdev);
+ 	}
+ 
+ #ifdef PORTING_TEST //test only
+@@ -5919,9 +5991,6 @@ static void _splt_hw_enque(struct sop_vi_dev *vdev, const enum sop_isp_raw hw_ra
+ 	u32 splt_fe1_w;
+ 	enum sop_isp_fe_chn_num chn_num, chn_max;
+ 	enum sop_isp_raw raw_num = hw_raw_num;
+-	enum isp_blk_id_t blk_id = (raw_num == ISP_PRERAW0)
+-					? ISP_BLK_ID_SPLT_FE0_WDMA
+-					: ISP_BLK_ID_SPLT_FE1_WDMA;
+ 
+ 	if (atomic_read(&vdev->isp_streamoff) == 1) {
+ 		vi_pr(VI_DBG, "stop streaming\n");
+@@ -5935,11 +6004,7 @@ static void _splt_hw_enque(struct sop_vi_dev *vdev, const enum sop_isp_raw hw_ra
+ 
+ 	/*disable wdma whnen ai isp ddr retrain */
+ 	if (ddr_need_retrain(vdev)) {
+-		ctx->isp_pipe_cfg[raw_num].is_drop_next_frame = true;
+-		if (ctx->isp_pipe_cfg[raw_num].raw_ai_isp_ap == RAW_AI_ISP_SPLT)
+-			ispblk_splt_wdma_ctrl_config(ctx, blk_id, false);
+-		trig_8051_if_pre_idle(vdev);
+-		vi_pr(VI_DBG, "ddr need retrain\n");
++		ddr_try_retrain(vdev);
+ 	}
+ 
+ 	if (_is_right_tile(ctx, raw_num))
+@@ -8078,6 +8143,16 @@ int vi_cb(void *dev, enum enum_modules_id caller, u32 cmd, void *arg)
+ 		rc = 0;
+ 		break;
+ 	}
++	case VI_CB_GET_RETRAIN_INFO:
++	{
++		struct vi_retrain_info *retrain_info = arg;
++
++		retrain_info->is_vi_en = (atomic_read(&vdev->isp_streamoff) == 0);
++		retrain_info->max_cur_eof = vdev->retrain.max_cur_eof;
++		retrain_info->min_next_sof = vdev->retrain.min_next_sof;
++		rc = 0;
++		break;
++	}
+ 	default:
+ 		break;
+ 	}
+@@ -9249,6 +9324,8 @@ static void _isp_sof_handler(struct sop_vi_dev *vdev, const enum sop_isp_raw raw
+ 	if (atomic_read(&vdev->isp_streamoff) == 1)
+ 		return;
+ 
++	update_record_info(vdev, raw_num, true);
++
+ 	if (_is_right_tile(ctx, raw_num))
+ 		return;
+ 
+@@ -9383,6 +9460,8 @@ static inline void _isp_pre_fe_done_handler(
+ 		atomic_set(&vdev->isp_err_times[raw_num], 0);
+ 	}
+ 
++	update_record_info(vdev, raw_num, false);
++
+ 	if (ctx->isp_pipe_cfg[raw_num].is_yuv_sensor) {
+ 		if (ctx->isp_pipe_cfg[raw_num].yuv_scene_mode == ISP_YUV_SCENE_BYPASS) {
+ 			vi_pr(VI_DBG, "pre_fe_%d yuv bypass done chn_num=%d frm_num=%d\n",
+@@ -10018,14 +10097,23 @@ static void _isp_pre_fe_frame_start_chk(
+ 		}
+ 	}
+ 
+-	if (frame_start & BIT(1))
++	if (frame_start & BIT(1)) {
++		vi_pr(VI_DBG, "pre_fe_%d sof chn_num=%d frm_num=%d\n",
++			raw_num, ISP_FE_CH1, vdev->pre_fe_sof_cnt[raw_num][ISP_FE_CH1]);
+ 		++vdev->pre_fe_sof_cnt[raw_num][ISP_FE_CH1];
++	}
+ 
+-	if (frame_start & BIT(2))
++	if (frame_start & BIT(2)) {
++		vi_pr(VI_DBG, "pre_fe_%d sof chn_num=%d frm_num=%d\n",
++			raw_num, ISP_FE_CH2, vdev->pre_fe_sof_cnt[raw_num][ISP_FE_CH2]);
+ 		++vdev->pre_fe_sof_cnt[raw_num][ISP_FE_CH2];
++	}
+ 
+-	if (frame_start & BIT(3))
++	if (frame_start & BIT(3)) {
++		vi_pr(VI_DBG, "pre_fe_%d sof chn_num=%d frm_num=%d\n",
++			raw_num, ISP_FE_CH3, vdev->pre_fe_sof_cnt[raw_num][ISP_FE_CH3]);
+ 		++vdev->pre_fe_sof_cnt[raw_num][ISP_FE_CH3];
++	}
+ }
+ 
+ static void _isp_pre_fe_frame_done_chk(
+@@ -10177,6 +10265,7 @@ int vi_create_instance(struct platform_device *pdev)
+ {
+ 	int ret = 0;
+ 	struct sop_vi_dev *vdev;
++	enum sop_isp_raw raw_num;
+ 
+ 	vdev = dev_get_drvdata(&pdev->dev);
+ 	if (!vdev) {
+@@ -10218,12 +10307,21 @@ int vi_create_instance(struct platform_device *pdev)
+ 		goto err;
+ 	}
+ 
+-	vdev->ddr_retrain_reg = ioremap(VI_DDR_RETRAIN_REG, 0x4);
+-	if (!vdev->ddr_retrain_reg) {
++	vdev->retrain.gp_reg = ioremap(VI_GP_RETRAIN_REG, 0x4);
++	if (!vdev->retrain.gp_reg) {
++		vi_pr(VI_ERR, "Failed to ioremap gp_retrain_reg\n");
++		goto err;
++	}
++
++	vdev->retrain.ddr_reg = ioremap(VI_DDR_RETRAIN_REG, 0x4);
++	if (!vdev->retrain.ddr_reg) {
+ 		vi_pr(VI_ERR, "Failed to ioremap ddr_retrain_reg\n");
+ 		goto err;
+ 	}
+ 
++	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++)
++		isp_streaming(&vdev->ctx, false, raw_num);
++
+ 	g_vi_ctx = (struct sop_vi_ctx *)vdev->shared_mem;
+ 
+ err:
+@@ -10254,7 +10352,8 @@ int vi_destroy_instance(struct platform_device *pdev)
+ 
+ 	tasklet_kill(&vdev->job_work);
+ 
+-	iounmap(vdev->ddr_retrain_reg);
++	iounmap(vdev->retrain.gp_reg);
++	iounmap(vdev->retrain.ddr_reg);
+ 
+ 	return ret;
+ }
+diff --git a/interdrv/v2/vi/chip/soph/vi_defines.h b/interdrv/v2/vi/chip/soph/vi_defines.h
+index b6f2be9a84..999eeec25b 100644
+--- a/interdrv/v2/vi/chip/soph/vi_defines.h
++++ b/interdrv/v2/vi/chip/soph/vi_defines.h
+@@ -37,6 +37,21 @@ struct vi_thread_attr {
+ 	int (*th_handler)(void *arg);
+ };
+ 
++struct record_info {
++	u64 last_sof_ts;
++	u64 last_eof_ts;
++	u64 next_sof_ts;
++	u64 period_ts;
++};
++
++struct ddr_retrain {
++	void __iomem	*gp_reg;
++	void __iomem	*ddr_reg;
++	struct record_info record_info[ISP_PRERAW_MAX];
++	u64 max_cur_eof;
++	u64 min_next_sof;
++};
++
+ /**
+  * struct sop_vi - VI IP abstraction
+  */
+@@ -46,7 +61,6 @@ struct sop_vi_dev {
+ 	struct cdev			cdev;
+ 	dev_t				cdev_id;
+ 	void __iomem			*reg_base;
+-	void __iomem			*ddr_retrain_reg;
+ 	int				irq_num;
+ 	struct clk			*clk_sys[6];
+ 	struct clk			*clk_isp[3];
+@@ -55,6 +69,7 @@ struct sop_vi_dev {
+ 	struct isp_ctx			ctx;
+ 	struct sop_isp_mbus_framefmt	usr_fmt;
+ 	struct sop_isp_rect		usr_crop;
++	struct ddr_retrain		retrain;
+ 	struct list_head		rdy_queue[ISP_PRERAW_MAX];
+ 	spinlock_t			rdy_lock;
+ 	u8				num_rdy[ISP_PRERAW_MAX];
+diff --git a/interdrv/v2/vo/chip/soph/disp.c b/interdrv/v2/vo/chip/soph/disp.c
+index b790fb7723..0ee460dc5b 100644
+--- a/interdrv/v2/vo/chip/soph/disp.c
++++ b/interdrv/v2/vo/chip/soph/disp.c
+@@ -2282,10 +2282,14 @@ int ctrl_set_disp_src(u8 inst, bool disp_from_sc)
+ 
+ bool ddr_need_retrain(void)
+ {
+-	if (retrain_reg)
++	struct ddr_retrain *retrain = &g_core_dev->retrain;
++
++	if (retrain_reg) {
+ 		return ioread32(retrain_reg) & 0xF;
+-	else
++	} else {
++		retrain->is_active = false;
+ 		return false;
++	}
+ }
+ 
+ void trigger_8051(void)
+@@ -2294,4 +2298,6 @@ void trigger_8051(void)
+ 		iowrite32(ioread32(gp_reg) | 0x10000, gp_reg);
+ 		iowrite32(ioread32(retrain_reg) & ~0xF, retrain_reg);
+ 	}
++
++	TRACE_VO(DBG_NOTICE, "retrain reg: %#x\n", ioread32(retrain_reg));
+ }
+diff --git a/interdrv/v2/vo/chip/soph/vo.c b/interdrv/v2/vo/chip/soph/vo.c
+index e9240103d1..5e88bdd9c1 100644
+--- a/interdrv/v2/vo/chip/soph/vo.c
++++ b/interdrv/v2/vo/chip/soph/vo.c
+@@ -21,6 +21,7 @@
+ #include "vo_cb.h"
+ #include "ldc_cb.h"
+ #include "rgn_cb.h"
++#include "vi_cb.h"
+ #include "vo_rgn_ctrl.h"
+ #include "reg.h"
+ 
+@@ -297,6 +298,18 @@ static int _vo_stitch_call_vpss(struct vpss_stitch_cfg *stitch_cfg)
+ 	return base_exe_module_cb(&exe_cb);
+ }
+ 
++static int _vo_call_cb(u32 m_id, u32 cmd_id, void *data)
++{
++	struct base_exe_m_cb exe_cb;
++
++	exe_cb.callee = m_id;
++	exe_cb.caller = E_MODULE_VO;
++	exe_cb.cmd_id = cmd_id;
++	exe_cb.data   = (void *)data;
++
++	return base_exe_module_cb(&exe_cb);
++}
++
+ int _vo_create_proc(struct vo_ctx *ctx)
+ {
+ 	int ret = 0;
+@@ -2246,6 +2259,17 @@ int vo_cb(void *dev, enum enum_modules_id caller, u32 cmd, void *arg)
+ 		break;
+ 	}
+ 
++	case VO_CB_GET_RETRAIN_INFO:
++	{
++		struct vo_retrain_info *info = (struct vo_retrain_info *)arg;
++
++		info->is_vo_en = (disp_check_tgen_enable(0) || disp_check_tgen_enable(1));
++		info->frame_end = vdev->retrain.frame_end;
++		info->margin = vdev->retrain.margin;
++
++		rc = 0;
++		break;
++	}
+ 	default:
+ 		break;
+ 	}
+@@ -2258,18 +2282,56 @@ u64 timespec64_to_us(struct timespec64 *time_spec)
+ 	return time_spec->tv_sec * 1000000L + time_spec->tv_nsec / 1000L;
+ }
+ 
++static void ddr_try_retrain(struct vo_core_dev *vdev, u64 cur_ts_us)
++{
++	int rc = 0;
++	struct vi_retrain_info info;
++	struct ddr_retrain *retrain = &vdev->retrain;
++	bool is_blanking = false, is_time_out = false;
++	u64 remain_ts = 150, max_duration_ts = 100000000;
++
++	rc = _vo_call_cb(E_MODULE_VI, VI_CB_GET_RETRAIN_INFO, &info);
++	if (rc) {
++		TRACE_VO(DBG_INFO, "fail to cb VI_CB_GET_RETRAIN_INFO");
++	}
++
++	if (!info.is_vi_en) {
++		trigger_8051();
++		retrain->is_active = false;
++		return;
++	}
++
++	if (!retrain->is_active) {
++		retrain->is_active = true;
++		retrain->win_start_ts = cur_ts_us;
++		retrain->win_expire_ts = cur_ts_us + max_duration_ts;
++	}
++
++	is_time_out = retrain->is_active && (cur_ts_us > retrain->win_expire_ts);
++	is_blanking = (info.min_next_sof > info.max_cur_eof) &&
++				    (cur_ts_us > info.max_cur_eof) &&
++				    (cur_ts_us < info.min_next_sof - remain_ts);
++
++	if (is_blanking || is_time_out) {
++		retrain->is_active = false;
++		trigger_8051();
++		return;
++	}
++}
++
+ void ddr_retrain(vo_dev dev, union disp_intr intr_status)
+ {
+ 	#define DISP_FPS_CNT 10
+ 	#define DISP_FPS_TABLE_CNT 6
+ 
++	struct vo_core_dev *vdev = g_core_dev;
+ 	static struct timespec64 disp_frame_need_time[DISP_MAX_INST], last_overlap_time;
+ 	static const u8 fps_table[DISP_FPS_TABLE_CNT] = {24, 25, 30, 48, 50, 60};
+ 	static const u16 margin_table[DISP_FPS_TABLE_CNT] = {489, 460, 345, 129, 115, 57};
+ 	static u8 disp_fps[DISP_MAX_INST], disp_fps_cnt[DISP_MAX_INST];
+ 	static struct timespec64 disp_fps_time[DISP_MAX_INST];
+ 	static u16 margin[DISP_MAX_INST];
+-	u64 disp_frame_need_time_us[DISP_MAX_INST], frame_gap_ms[DISP_MAX_INST];
++	u64 disp_frame_need_time_us[DISP_MAX_INST], frame_gap_ms[DISP_MAX_INST], disp_sub_time;
+ 	struct timespec64 cur_overlap_time;
+ 	u8 i = 0;
+ 
+@@ -2302,10 +2364,18 @@ void ddr_retrain(vo_dev dev, union disp_intr intr_status)
+ 					}
+ 				}
+ 			}
+-			if ((disp_frame_need_time_us[dev] - disp_frame_need_time_us[!dev]
+-				< margin[dev]) || !disp_check_tgen_enable(!dev)) {
+-				if (ddr_need_retrain())
+-					trigger_8051();
++
++			disp_sub_time = disp_frame_need_time_us[dev] - disp_frame_need_time_us[!dev];
++			if ((disp_sub_time < margin[dev]) || !disp_check_tgen_enable(!dev)) {
++				if (ddr_need_retrain()) {
++					vdev->retrain.frame_end = disp_frame_need_time_us[dev];
++					vdev->retrain.margin = !disp_check_tgen_enable(!dev)
++								? margin[dev]
++								: margin[dev] - disp_sub_time;
++					ddr_try_retrain(vdev, disp_frame_need_time_us[dev]);
++					TRACE_VO(DBG_NOTICE, "VO us(%lld), margin(%d)\n",
++								disp_frame_need_time_us[dev], margin[dev]);
++				}
+ 				if (timespec64_to_us(&cur_overlap_time)
+ 					- timespec64_to_us(&last_overlap_time) > 900000L)
+ 					pr_info("disp%d ahead disp%d, vblanking overlap. "
+diff --git a/interdrv/v2/vo/chip/soph/vo_core.c b/interdrv/v2/vo/chip/soph/vo_core.c
+index 71f4f4c261..ec4b5d46c2 100644
+--- a/interdrv/v2/vo/chip/soph/vo_core.c
++++ b/interdrv/v2/vo/chip/soph/vo_core.c
+@@ -211,7 +211,7 @@ static int _init_resources(struct platform_device *pdev)
+ 			dev_err(&pdev->dev, "No IRQ resource for %s\n",  disp_irq_name[i]);
+ 			return -ENOENT;
+ 		}
+-		dev_info(&pdev->dev, "irq(%d) for %s get from platform driver.\n",
++		dev_info(&pdev->dev, "irq(%d) for %s get from platformaa driver.\n",
+ 				dev->vo_core[i].irq_num,  disp_irq_name[i]);
+ 	}
+ 
+diff --git a/interdrv/v2/vo/chip/soph/vo_defines.h b/interdrv/v2/vo/chip/soph/vo_defines.h
+index 729c0a288c..2d1a72a03d 100644
+--- a/interdrv/v2/vo/chip/soph/vo_defines.h
++++ b/interdrv/v2/vo/chip/soph/vo_defines.h
+@@ -30,6 +30,16 @@ struct vo_core {
+ 	atomic_t disp_streamon;
+ };
+ 
++struct ddr_retrain {
++	bool is_active;
++	u64 win_start_ts;
++	u64 win_expire_ts;
++
++	//for vi
++	u64 frame_end;
++	u64 margin;
++};
++
+ struct vo_core_dev {
+ 	// private data
+ 	struct device *dev;
+@@ -41,6 +51,7 @@ struct vo_core_dev {
+ 	//vo_mac, disp, dsi_mac, dsi_phy, oenc
+ 	void __iomem *reg_base[10];
+ 	struct vo_core vo_core[VO_MAX_DEV_NUM];
++	struct ddr_retrain retrain;
+ };
+ 
+ #ifdef __cplusplus
+-- 
+2.25.1
+

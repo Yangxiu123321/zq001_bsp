@@ -1,0 +1,26 @@
+From ace404d065666d24a56a7ec3fe506a53ccbee867 Mon Sep 17 00:00:00 2001
+From: "harry.wang" <harry.wang@sophgo.com>
+Date: Mon, 19 May 2025 15:39:45 +0800
+Subject: [PATCH 01/11] [bug][vdec] fix drop frame
+
+Change-Id: I71d8a21564cf7775f04a7074abc22655be5e55f2
+---
+ interdrv/v2/vc_drv/module/src/vdec_api.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/interdrv/v2/vc_drv/module/src/vdec_api.c b/interdrv/v2/vc_drv/module/src/vdec_api.c
+index 78686522a4..017590e59a 100644
+--- a/interdrv/v2/vc_drv/module/src/vdec_api.c
++++ b/interdrv/v2/vc_drv/module/src/vdec_api.c
+@@ -1205,7 +1205,7 @@ int vdec_decode_frame(void *pHandle, DecOnePicCfg *pdopc, int timeout_ms)
+             pst_handle->seq_status = SEQ_INIT_START;
+         } else if (pdopc->bsLen == 0) {
+             if(pst_handle->seq_status == SEQ_INIT_NON)
+-                return RETCODE_SUCCESS;
++                return RETCODE_QUEUEING_FAILURE;
+ 
+             if (queue_status.instanceQueueCount || Queue_Get_Cnt(pst_handle->display_frame)) {
+                 if (pst_handle->is_bind_mode)
+-- 
+2.25.1
+

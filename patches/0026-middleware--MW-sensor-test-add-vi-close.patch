@@ -1,0 +1,34 @@
+From c907e778fa861663bcd7c9625b4df7803983c53c Mon Sep 17 00:00:00 2001
+From: "shawn.wu" <shawn.wu@sophgo.com>
+Date: Fri, 20 Jun 2025 18:21:45 +0800
+Subject: [PATCH 4/7] [MW]sensor test add vi close
+
+Change-Id: If923b2ebcd23abadaa9215d4e390425bb2c665cd
+---
+ v2/sample/sensor_test/sensor_test.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/v2/sample/sensor_test/sensor_test.c b/v2/sample/sensor_test/sensor_test.c
+index 27a850903..6a3be9034 100644
+--- a/v2/sample/sensor_test/sensor_test.c
++++ b/v2/sample/sensor_test/sensor_test.c
+@@ -35,6 +35,7 @@ void _PLAT_ERR_Exit(void)
+ 		SAMPLE_COMM_VI_DestroyIsp(&g_stViConfig);
+ 		SAMPLE_COMM_VI_DestroyVi(&g_stViConfig);
+ 	}
++	SAMPLE_COMM_VI_CLOSE();
+ 	SAMPLE_COMM_SYS_Exit();
+ }
+ 
+@@ -479,6 +480,8 @@ static void sys_vi_deinit(void)
+ 
+ 	SAMPLE_COMM_VI_DestroyVi(&g_stViConfig);
+ 
++	SAMPLE_COMM_VI_CLOSE();
++
+ 	SAMPLE_COMM_SYS_Exit();
+ }
+ 
+-- 
+2.25.1
+

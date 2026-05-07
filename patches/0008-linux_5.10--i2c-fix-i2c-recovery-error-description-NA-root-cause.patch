@@ -1,0 +1,148 @@
+From ee6062e476cf8999cb854d2cfa7eaf4455c3afe4 Mon Sep 17 00:00:00 2001
+From: "jiajun.zhang" <jiajun.zhang@sophgo.com>
+Date: Thu, 3 Jul 2025 20:29:57 +0800
+Subject: [PATCH 2/3] (i2c):fix i2c recovery error [description ]:NA [root
+ cause]:NA [JIRA ID]:NA [chip project]:A2 [side effects]:NA [Affected
+ *.ko/*.so/*.a] :NA
+
+Change-Id: I09415835dd30bdf2aef16eac62928b0af144e3f8
+---
+ drivers/i2c/busses/i2c-designware-master.c | 31 ++++++++++++++++++++++
+ drivers/i2c/i2c-core-base.c                | 21 ++++++++++++++-
+ drivers/i2c/i2c-core.h                     | 10 +++++++
+ include/linux/i2c.h                        | 12 +++++++++
+ 4 files changed, 73 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/i2c/busses/i2c-designware-master.c b/drivers/i2c/busses/i2c-designware-master.c
+index d74ef54dddf3..8a49c420196d 100644
+--- a/drivers/i2c/busses/i2c-designware-master.c
++++ b/drivers/i2c/busses/i2c-designware-master.c
+@@ -723,7 +723,38 @@ static int i2c_dw_init_recovery_info(struct dw_i2c_dev *dev)
+ 	struct i2c_bus_recovery_info *rinfo = &dev->rinfo;
+ 	struct i2c_adapter *adap = &dev->adapter;
+ 	struct gpio_desc *gpio;
++#ifdef CONFIG_ARCH_CVITEK
++	int ret;
++	u32 pinmux_data[3];
++
++	ret = device_property_read_u32_array(dev->dev, "scl,pinmux", pinmux_data, 3);
++	if (ret) {
++		dev_dbg(dev->dev, "can't read pinmux config, ret=%d\n", ret);
++	} else {
++		rinfo->scl_reg_addr = pinmux_data[0];	//pinmux base addr
++		rinfo->scl_func_val = pinmux_data[1];	//func value
++		rinfo->scl_gpio_val = pinmux_data[2];	//gpio value
++
++		// remap pinmux reg
++		rinfo->scl_reg = ioremap(rinfo->scl_reg_addr, sizeof(u32));
++		if (!rinfo->scl_reg)
++			dev_dbg(dev->dev, "Fail remap rinfo->scl_reg\n");
++	}
+ 
++	ret = device_property_read_u32_array(dev->dev, "sda,pinmux", pinmux_data, 3);
++	if (ret) {
++		dev_dbg(dev->dev, "can't read pinmux config, ret=%d\n", ret);
++	} else {
++		rinfo->sda_reg_addr = pinmux_data[0];	//pinmux base addr
++		rinfo->sda_func_val = pinmux_data[1];	//func value
++		rinfo->sda_gpio_val = pinmux_data[2];	//gpio value
++
++		// remap pinmux reg
++		rinfo->sda_reg = ioremap(rinfo->sda_reg_addr, sizeof(u32));
++		if (!rinfo->sda_reg)
++			dev_dbg(dev->dev, "Fail remap rinfo->sda_reg\n");
++	}
++#endif
+ 	gpio = devm_gpiod_get_optional(dev->dev, "scl", GPIOD_OUT_HIGH);
+ 	if (IS_ERR_OR_NULL(gpio))
+ 		return PTR_ERR_OR_ZERO(gpio);
+diff --git a/drivers/i2c/i2c-core-base.c b/drivers/i2c/i2c-core-base.c
+index 573b5da145d1..7d80aa9c313b 100644
+--- a/drivers/i2c/i2c-core-base.c
++++ b/drivers/i2c/i2c-core-base.c
+@@ -182,9 +182,18 @@ int i2c_generic_scl_recovery(struct i2c_adapter *adap)
+ 
+ 	if (bri->prepare_recovery)
+ 		bri->prepare_recovery(adap);
++#ifdef CONFIG_ARCH_CVITEK
++	if (bri->scl_reg && bri->sda_reg) {
++		PINMUX_SET_REG_FUNC(bri->scl_reg, bri->scl_gpio_val);
++		PINMUX_SET_REG_FUNC(bri->sda_reg, bri->sda_gpio_val);
++		dev_dbg(&adap->dev, "i2c gpio: 0x%x=0x%x, 0x%x=0x%x.\n",
++			bri->scl_reg_addr, bri->scl_gpio_val,
++			bri->sda_reg_addr, bri->sda_gpio_val);
++	}
++#else
+ 	if (bri->pinctrl)
+ 		pinctrl_select_state(bri->pinctrl, bri->pins_gpio);
+-
++#endif
+ 	/*
+ 	 * If we can set SDA, we will always create a STOP to ensure additional
+ 	 * pulses will do no harm. This is achieved by letting SDA follow SCL
+@@ -239,8 +248,18 @@ int i2c_generic_scl_recovery(struct i2c_adapter *adap)
+ 
+ 	if (bri->unprepare_recovery)
+ 		bri->unprepare_recovery(adap);
++#ifdef CONFIG_ARCH_CVITEK
++	if (bri->scl_reg && bri->sda_reg) {
++		PINMUX_SET_REG_FUNC(bri->scl_reg, bri->scl_func_val);
++		PINMUX_SET_REG_FUNC(bri->sda_reg, bri->sda_func_val);
++		dev_dbg(&adap->dev, "i2c func: 0x%x=0x%x, 0x%x=0x%x.\n",
++			bri->scl_reg_addr, bri->scl_func_val,
++			bri->sda_reg_addr, bri->sda_func_val);
++	}
++#else
+ 	if (bri->pinctrl)
+ 		pinctrl_select_state(bri->pinctrl, bri->pins_default);
++#endif
+ 
+ 	return ret;
+ }
+diff --git a/drivers/i2c/i2c-core.h b/drivers/i2c/i2c-core.h
+index 8ce261167a2d..47573c87e48d 100644
+--- a/drivers/i2c/i2c-core.h
++++ b/drivers/i2c/i2c-core.h
+@@ -22,6 +22,16 @@ int i2c_check_7bit_addr_validity_strict(unsigned short addr);
+ int i2c_dev_irq_from_resources(const struct resource *resources,
+ 			       unsigned int num_resources);
+ 
++#ifdef CONFIG_ARCH_CVITEK
++/* bit4~bit7 */
++#define PINMUX_FUNC_MASK   0xF0    // bit4~bit7
++#define PINMUX_FUNC_SHIFT  4
++
++/* option */
++#define PINMUX_SET_REG_FUNC(reg, func_val) \
++	writel((readl(reg) & ~PINMUX_FUNC_MASK) | (((func_val) << PINMUX_FUNC_SHIFT) & PINMUX_FUNC_MASK), reg)
++#endif
++
+ /*
+  * We only allow atomic transfers for very late communication, e.g. to access a
+  * PMIC when powering down. Atomic transfers are a corner case and not for
+diff --git a/include/linux/i2c.h b/include/linux/i2c.h
+index ea054e8ea2a5..574c5120c704 100644
+--- a/include/linux/i2c.h
++++ b/include/linux/i2c.h
+@@ -636,6 +636,18 @@ struct i2c_bus_recovery_info {
+ 	struct pinctrl *pinctrl;
+ 	struct pinctrl_state *pins_default;
+ 	struct pinctrl_state *pins_gpio;
++#ifdef CONFIG_ARCH_CVITEK
++	u32 scl_reg_addr;
++	u32 scl_func_val;
++	u32 scl_gpio_val;
++
++	u32 sda_reg_addr;
++	u32 sda_func_val;
++	u32 sda_gpio_val;
++
++	void __iomem *scl_reg;
++	void __iomem *sda_reg;
++#endif
+ };
+ 
+ int i2c_recover_bus(struct i2c_adapter *adap);
+-- 
+2.25.1
+

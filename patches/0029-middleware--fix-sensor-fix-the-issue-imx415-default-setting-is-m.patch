@@ -1,0 +1,27 @@
+From e1cef6508855c75dab8b66898fb9a7bccbbec42a Mon Sep 17 00:00:00 2001
+From: "shawn.wu" <shawn.wu@sophgo.com>
+Date: Thu, 22 Jan 2026 10:16:52 +0800
+Subject: [PATCH 7/7] [fix](sensor):fix the issue imx415 default setting is
+ mirrored
+
+Change-Id: I6764568504d6c4bae61145b10ebe8e302c4b9e8c
+---
+ v1/component/isp/sensor/cv182x/sony_imx415/imx415_sensor_ctl.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/v1/component/isp/sensor/cv182x/sony_imx415/imx415_sensor_ctl.c b/v1/component/isp/sensor/cv182x/sony_imx415/imx415_sensor_ctl.c
+index e9859d527..1e3dd7640 100755
+--- a/v1/component/isp/sensor/cv182x/sony_imx415/imx415_sensor_ctl.c
++++ b/v1/component/isp/sensor/cv182x/sony_imx415/imx415_sensor_ctl.c
+@@ -414,7 +414,7 @@ static void imx415_linear_8m25_init(VI_PIPE ViPipe)
+ 	imx415_write_register(ViPipe, 0x3025, 0x0A);
+ 	imx415_write_register(ViPipe, 0x3028, 0x4C);
+ 	imx415_write_register(ViPipe, 0x3029, 0x04);
+-	imx415_write_register(ViPipe, 0x3030, 0x01);
++	imx415_write_register(ViPipe, 0x3030, 0x00);
+ 	imx415_write_register(ViPipe, 0x3033, 0x06);
+ 	imx415_write_register(ViPipe, 0x3050, 0x08);
+ 	imx415_write_register(ViPipe, 0x30C1, 0x00);
+-- 
+2.25.1
+

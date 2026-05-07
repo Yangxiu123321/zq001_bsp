@@ -1,0 +1,26 @@
+From e06eacbd5a5e96e7f94242230b13c9a685bc565d Mon Sep 17 00:00:00 2001
+From: "shawn.wu" <shawn.wu@sophgo.com>
+Date: Wed, 3 Sep 2025 16:41:43 +0800
+Subject: [PATCH 06/11] [fix][vdec]Increase the priority of vdec threads
+
+Change-Id: Ife332aee032f422b617a9f85f1770adcad877475
+---
+ interdrv/v2/vc_drv/module/src/vdec_api.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/interdrv/v2/vc_drv/module/src/vdec_api.c b/interdrv/v2/vc_drv/module/src/vdec_api.c
+index 017590e59a..5fb9304714 100644
+--- a/interdrv/v2/vc_drv/module/src/vdec_api.c
++++ b/interdrv/v2/vc_drv/module/src/vdec_api.c
+@@ -121,7 +121,7 @@ int vdec_init_handle_pool(void)
+ {
+     int i;
+     struct sched_param param = {
+-        .sched_priority = 95,
++        .sched_priority = 99,
+     };
+ 
+     for (i=1; i<MAX_NUM_VPU_CORE; i++) {
+-- 
+2.25.1
+

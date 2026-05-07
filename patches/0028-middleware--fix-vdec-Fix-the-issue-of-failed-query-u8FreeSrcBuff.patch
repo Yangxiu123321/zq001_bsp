@@ -1,0 +1,25 @@
+From 9a8a2bf4ed64f960213308589c4a521b13d43ac4 Mon Sep 17 00:00:00 2001
+From: "shawn.wu" <shawn.wu@sophgo.com>
+Date: Sat, 11 Oct 2025 15:46:30 +0800
+Subject: [PATCH 6/7] [fix][vdec]Fix the issue of failed query u8FreeSrcBuffer
+
+Change-Id: I71279e1cadcfdcf4f8e9ed6fcf55e625d40ebb13
+---
+ v2/include/cvi_comm_vdec.h | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/v2/include/cvi_comm_vdec.h b/v2/include/cvi_comm_vdec.h
+index f3af95a9f..6e6a3a229 100644
+--- a/v2/include/cvi_comm_vdec.h
++++ b/v2/include/cvi_comm_vdec.h
+@@ -158,6 +158,7 @@ typedef struct _VDEC_CHN_STATUS_S {
+ 	CVI_S32 u32LeftStreamBytes; /* R; left stream bytes waiting for decode */
+ 	CVI_S32 u32LeftStreamFrames; /* R; left frames waiting for decode,only valid for VIDEO_MODE_FRAME */
+ 	CVI_S32 u32LeftPics; /* R; pics waiting for output */
++	CVI_S32 u32EmptyStreamBufSzie;
+ 	CVI_BOOL bStartRecvStream; /* R; had started recv stream? */
+ 	CVI_U32 u32RecvStreamFrames; /* R; how many frames of stream has been received. valid when send by frame. */
+ 	CVI_U32 u32DecodeStreamFrames; /* R; how many frames of stream has been decoded. valid when send by frame. */
+-- 
+2.25.1
+

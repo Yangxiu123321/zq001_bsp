@@ -1,0 +1,30 @@
+From 59d055e28deba91410cbcc3a21b2c62e1fc8c179 Mon Sep 17 00:00:00 2001
+From: "harry.wang" <harry.wang@sophgo.com>
+Date: Wed, 10 Dec 2025 14:37:33 +0800
+Subject: [PATCH 10/11] fix memory leak
+
+Change-Id: Ib61d3b9807b972442dc6406cbcfe850407552ceb
+---
+ interdrv/v2/vc_drv/module/src/vdec_api.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/interdrv/v2/vc_drv/module/src/vdec_api.c b/interdrv/v2/vc_drv/module/src/vdec_api.c
+index b52e8daee3..2a33edf4e6 100644
+--- a/interdrv/v2/vc_drv/module/src/vdec_api.c
++++ b/interdrv/v2/vc_drv/module/src/vdec_api.c
+@@ -440,8 +440,11 @@ static int free_framebuffer(void *pHandle)
+         pst_handle->pst_frame_blk[i] = 0;
+         do {
+             mod_id = atomic64_read(&vb->mod_ids);
+-            if ((mod_id & ~BIT(ID_VDEC)) != 0)
++            if ((mod_id & ~BIT(ID_VDEC)) != 0) {
++                atomic_sub(1, &vb->usr_cnt);
+                 break;
++            }
++
+             user_cnt = atomic_read(&vb->usr_cnt);
+             if (user_cnt > 1)
+                 atomic_sub(user_cnt-1, &vb->usr_cnt);
+-- 
+2.25.1
+

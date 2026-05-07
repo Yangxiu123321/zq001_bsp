@@ -1,0 +1,79 @@
+From 82d8469ed62cc78df7d30ea1ff8befc9593f730c Mon Sep 17 00:00:00 2001
+From: "jie.lu" <jie.lu@sophgo.com>
+Date: Tue, 17 Jun 2025 11:04:22 +0800
+Subject: [PATCH 05/11] [VI]add skip retrig when yuv and frame_num is 0
+
+Change-Id: Ibf9e854f9c1a9eac874b2dfe629f6aab08dc971b
+---
+ interdrv/v2/vi/chip/soph/vi.c | 34 ++++++++++++++++++++++++++++++++--
+ 1 file changed, 32 insertions(+), 2 deletions(-)
+
+diff --git a/interdrv/v2/vi/chip/soph/vi.c b/interdrv/v2/vi/chip/soph/vi.c
+index 1877d87d56..bb5cc49e94 100644
+--- a/interdrv/v2/vi/chip/soph/vi.c
++++ b/interdrv/v2/vi/chip/soph/vi.c
+@@ -150,6 +150,33 @@ static bool ddr_need_retrain(struct sop_vi_dev *vdev)
+ 	return false;
+ }
+ 
++static bool _isp_yuv_bypass_check_stop_input(struct sop_vi_dev *vdev, enum sop_isp_raw raw_num,
++		enum sop_isp_fe_chn_num chn_num)
++{
++	struct timespec64 cur_time;
++	u64 cur_timeus;
++	enum sop_isp_fe_chn_num buf_chn_num = vdev->ctx.raw_chnstr_num[raw_num] + chn_num;
++
++	if (!(vdev->ctx.isp_pipe_cfg[raw_num].is_yuv_sensor &&
++		vdev->ctx.isp_pipe_cfg[raw_num].yuv_scene_mode == ISP_YUV_SCENE_BYPASS)) {
++			return false;
++	}
++
++	if (vdev->pre_fe_frm_num[raw_num][chn_num] == 0 || g_vi_ctx->chn_status[buf_chn_num].frame_rate == 0) {
++		return true;
++	}
++
++	cur_time = ktime_to_timespec64(ktime_get());
++	cur_timeus = cur_time.tv_sec * 1000000L + cur_time.tv_nsec / 1000L;
++
++	if ((1000000 / g_vi_ctx->chn_status[buf_chn_num].frame_rate)
++		< (cur_timeus - g_vi_ctx->chn_status[buf_chn_num].prev_time)) {
++		return true;
++	}
++
++	return false;
++}
++
+ static void trig_8051_if_pre_idle(struct sop_vi_dev *vdev)
+ {
+ 	enum sop_isp_fe_chn_num fe_chn;
+@@ -169,6 +196,9 @@ static void trig_8051_if_pre_idle(struct sop_vi_dev *vdev)
+ 			continue;
+ 
+ 		for (fe_chn = ISP_FE_CH0; fe_chn < ISP_FE_CHN_MAX; fe_chn++) {
++			if (_isp_yuv_bypass_check_stop_input(vdev, raw_num, fe_chn)) {
++				continue;
++			}
+ 			if (atomic_read(&vdev->pre_fe_state[raw_num][fe_chn]) != ISP_STATE_IDLE) {
+ 				vi_pr(VI_WARN, "need retrain but raw_%d FE busy\n", raw_num);
+ 				return;
+@@ -6853,7 +6883,7 @@ static long _vi_s_ctrl(struct sop_vi_dev *vdev, struct vi_ext_control *p)
+ 	{
+ 		struct resize_yuv_path_cfg_s cfg;
+ 		u8 dev_num;
+-		int j, i, ViPipe;
++		int j, ViPipe;
+ 
+ 		vi_pr(VI_INFO, "Start resize YUV path\n");
+ 
+@@ -6861,7 +6891,7 @@ static long _vi_s_ctrl(struct sop_vi_dev *vdev, struct vi_ext_control *p)
+ 			break;
+ 
+ 		ViPipe = cfg.vi_pipe;
+-		if (!(ctx->isp_pipe_cfg[i].is_yuv_sensor &&
++		if (!(ctx->isp_pipe_cfg[ViPipe].is_yuv_sensor &&
+ 			ctx->isp_pipe_cfg[ViPipe].yuv_scene_mode == ISP_YUV_SCENE_BYPASS)) {
+ 			vi_pr(VI_ERR, "Resize pipe_%d only support Yuv bypass", ViPipe);
+ 			break;
+-- 
+2.25.1
+

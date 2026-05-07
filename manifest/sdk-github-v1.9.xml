@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <remote name="origin" fetch="git@github.com:sophgo/" review="git@github.com:sophgo/"/>
+  
+  <default remote="origin" revision="bm1688" sync-j="4"/>
+  
+  <project name="build" revision="bm1688_v1.9"/>
+  <project name="cvi_rtsp" revision="master"/>
+  <project name="fsbl" revision="bm1688"/>
+  <project name="isp_tuning" revision="bm1688"/>
+  <project name="libsophon" revision="bm1688_v1.9"/>
+  <project name="libsophav" path="libsophon/libsophav" revision="bm1688"/>
+  <project name="sophon_media" revision="master"/>
+  <project name="libsophav" path="sophon_media/libsophav" revision="bm1688"/>
+  <project name="linux_5.10" revision="bm1688_v1.9"/>
+  <project name="middleware" revision="bm1688"/>
+  <project name="isp" path="middleware/v2/modules/isp" revision="bm1688"/>
+  <project name="osdrv" revision="bm1688_v1.9"/>
+  <project name="oss" revision="master"/>
+  <project name="ramdisk" revision="bm1688"/>
+  <project name="sophliteos" revision="A2"/>
+  <project name="tdl_sdk" revision="bm1688"/>
+  <project name="u-boot-2021.10" revision="bm1688_v1.9"/>
+</manifest>

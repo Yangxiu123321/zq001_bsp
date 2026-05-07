@@ -1,0 +1,6 @@
+{
+    "bsp": {
+        "xml": "../manifest/sdk-github-v1.9.xml",
+        "txt": "../manifest/git_version_186x_v1.9.txt"
+    }
+}

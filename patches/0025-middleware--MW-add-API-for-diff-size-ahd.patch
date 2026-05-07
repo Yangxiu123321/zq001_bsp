@@ -1,0 +1,264 @@
+From 7a46b150eed6650452feeb1d9fde893c53a624e1 Mon Sep 17 00:00:00 2001
+From: "jie.lu" <jie.lu@sophgo.com>
+Date: Tue, 27 May 2025 20:32:31 +0800
+Subject: [PATCH 3/7] [MW]add API for diff size ahd
+
+Change-Id: I7649d331cd7804352fe58355b28639d157202b08
+[1]add resize ahd yuv API
+[2]add sensor_test resize case
+[3]fix sensor_test isp_mode
+---
+ v2/include/cvi_vi.h                  | 11 +++++
+ v2/modules/vi/include/vi_ioctl.h     |  1 +
+ v2/modules/vi/include/vi_uapi.h      |  8 ++++
+ v2/modules/vi/include/vi_v4l2_uapi.h |  8 ++++
+ v2/modules/vi/src/cvi_vi.c           | 27 ++++++++++++
+ v2/modules/vi/src/vi_ioctl.c         |  5 +++
+ v2/sample/sensor_test/sensor_test.c  | 63 ++++++++++++++++++++++++++--
+ 7 files changed, 120 insertions(+), 3 deletions(-)
+
+diff --git a/v2/include/cvi_vi.h b/v2/include/cvi_vi.h
+index f165be5f8..7c840344a 100644
+--- a/v2/include/cvi_vi.h
++++ b/v2/include/cvi_vi.h
+@@ -35,6 +35,17 @@ CVI_S32 CVI_VI_Suspend(void);
+  */
+ CVI_S32 CVI_VI_Resume(void);
+ 
++/**
++ * @brief Get vi version.
++ *
++ * @param ViPipe(In), Version info.
++ * @param resizeCfg(In), Version info.
++ * @param recropCfg(In), Version info.
++ *
++ * @return CVI_S32 Return CVI_SUCCESS if succeed.
++ */
++CVI_S32 CVI_VI_ResizeYuvPath(VI_PIPE ViPipe, SIZE_S *resizeCfg, RECT_S *recropCfg);
++
+ /* 1 for vi device */
+ /**
+  * @brief Set vi device num.
+diff --git a/v2/modules/vi/include/vi_ioctl.h b/v2/modules/vi/include/vi_ioctl.h
+index 5303e87f3..df449c860 100644
+--- a/v2/modules/vi/include/vi_ioctl.h
++++ b/v2/modules/vi/include/vi_ioctl.h
+@@ -12,6 +12,7 @@
+ 
+ int vi_enable_usr_pic(int fd, bool enable);
+ int vi_set_usr_pic(int fd, struct cvi_isp_usr_pic_cfg *cfg);
++int vi_resize_yuv_path(int fd, struct resize_yuv_path_cfg_s *cfg);
+ int vi_put_usr_pic(int fd, CVI_U64 phyAddr);
+ int vi_set_usr_pic_timing(int fd, CVI_U32 fps);
+ int vi_set_be_online(int fd, CVI_BOOL online);
+diff --git a/v2/modules/vi/include/vi_uapi.h b/v2/modules/vi/include/vi_uapi.h
+index 71c859c00..830e031bb 100644
+--- a/v2/modules/vi/include/vi_uapi.h
++++ b/v2/modules/vi/include/vi_uapi.h
+@@ -32,6 +32,7 @@ enum VI_IOCTL {
+ 	VI_IOCTL_POST_STS_GET,
+ 	VI_IOCTL_POST_STS_PUT,
+ 	VI_IOCTL_USR_PIC_CFG,
++	VI_IOCTL_RESIZE_YUV_PATH,
+ 	VI_IOCTL_USR_PIC_ONOFF,
+ 	VI_IOCTL_USR_PIC_PUT,
+ 	VI_IOCTL_AE_CFG,
+@@ -233,6 +234,13 @@ struct dis_info_s {
+ 	struct crop_size_s dis_i;
+ };
+ 
++struct resize_yuv_path_cfg_s {
++	VI_PIPE ViPipe;
++	__u32 max_width;
++	__u32 max_height;
++	struct crop_size_s crop_cfg;
++};
++
+ struct vi_chn_rot_cfg {
+ 	VI_PIPE ViPipe;
+ 	VI_CHN ViChn;
+diff --git a/v2/modules/vi/include/vi_v4l2_uapi.h b/v2/modules/vi/include/vi_v4l2_uapi.h
+index d761d2d1c..80711808e 100644
+--- a/v2/modules/vi/include/vi_v4l2_uapi.h
++++ b/v2/modules/vi/include/vi_v4l2_uapi.h
+@@ -32,6 +32,7 @@ enum VI_IOCTL {
+ 	VI_IOCTL_POST_STS_GET,
+ 	VI_IOCTL_POST_STS_PUT,
+ 	VI_IOCTL_USR_PIC_CFG,
++	VI_IOCTL_RESIZE_YUV_PATH,
+ 	VI_IOCTL_USR_PIC_ONOFF,
+ 	VI_IOCTL_USR_PIC_PUT,
+ 	VI_IOCTL_AE_CFG,
+@@ -191,6 +192,13 @@ struct dis_info_s {
+ 	struct crop_size_s dis_i;
+ };
+ 
++struct resize_yuv_path_cfg_s {
++	VI_PIPE ViPipe;
++	__u32 max_width;
++	__u32 max_height;
++	struct crop_size_s crop_cfg;
++};
++
+ struct vi_chn_rot_cfg {
+ 	VI_PIPE ViPipe;
+ 	VI_CHN ViChn;
+diff --git a/v2/modules/vi/src/cvi_vi.c b/v2/modules/vi/src/cvi_vi.c
+index 102a710f3..dc9e827b8 100644
+--- a/v2/modules/vi/src/cvi_vi.c
++++ b/v2/modules/vi/src/cvi_vi.c
+@@ -596,6 +596,33 @@ CVI_S32 CVI_VI_SetBypassFrm(CVI_U32 snr_num, CVI_U8 bypass_num)
+ /**************************************************************************
+  *   Public APIs.
+  **************************************************************************/
++CVI_S32 CVI_VI_ResizeYuvPath(VI_PIPE ViPipe, SIZE_S *resizeCfg, RECT_S *recropCfg)
++{
++	CVI_S32 s32Ret = CVI_SUCCESS;
++	CVI_S32 fd = -1;
++	struct resize_yuv_path_cfg_s resize_cfg;
++
++	CHECK_VI_PIPEID_VALID(ViPipe);
++
++	fd = get_vi_fd();
++
++	resize_cfg.max_width = resizeCfg->u32Width;
++	resize_cfg.max_height = resizeCfg->u32Height;
++	resize_cfg.crop_cfg.start_x = recropCfg->s32X;
++	resize_cfg.crop_cfg.start_y = recropCfg->s32Y;
++	resize_cfg.crop_cfg.end_x = recropCfg->s32X + recropCfg->u32Width;
++	resize_cfg.crop_cfg.end_y = recropCfg->s32Y + recropCfg->u32Height;
++	resize_cfg.ViPipe = ViPipe;
++
++	s32Ret = vi_resize_yuv_path(fd, &resize_cfg);
++	if (s32Ret != CVI_SUCCESS) {
++		CVI_TRACE_VI(CVI_DBG_ERR, "resize_yuv_path ioctl failed\n");
++		return s32Ret;
++	}
++
++	return CVI_SUCCESS;
++}
++
+ CVI_S32 CVI_VI_SetDevNum(CVI_U32 devNum)
+ {
+ 	UNUSED(devNum);
+diff --git a/v2/modules/vi/src/vi_ioctl.c b/v2/modules/vi/src/vi_ioctl.c
+index 0e04205c5..47c8a7560 100644
+--- a/v2/modules/vi/src/vi_ioctl.c
++++ b/v2/modules/vi/src/vi_ioctl.c
+@@ -118,6 +118,11 @@ int vi_set_usr_pic(int fd, struct cvi_isp_usr_pic_cfg *cfg)
+ 	S_CTRL_PTR(fd, cfg, VI_IOCTL_USR_PIC_CFG);
+ }
+ 
++int vi_resize_yuv_path(int fd, struct resize_yuv_path_cfg_s *cfg)
++{
++	S_CTRL_PTR(fd, cfg, VI_IOCTL_RESIZE_YUV_PATH);
++}
++
+ int vi_put_usr_pic(int fd, CVI_U64 phyAddr)
+ {
+ 	S_CTRL_VALUE64(fd, phyAddr, VI_IOCTL_USR_PIC_PUT);
+diff --git a/v2/sample/sensor_test/sensor_test.c b/v2/sample/sensor_test/sensor_test.c
+index 33378f6d2..27a850903 100644
+--- a/v2/sample/sensor_test/sensor_test.c
++++ b/v2/sample/sensor_test/sensor_test.c
+@@ -291,7 +291,7 @@ static int sys_vi_init(void)
+ 	LOG_LEVEL_CONF_S log_conf;
+ 	VI_DEV_ATTR_S stVidevAttr;
+ 	CVI_U32 Vb_cnt;
+-	CVI_S32 isp_mode;
++	CVI_S32 isp_mode = 1;
+ 
+ 	memset(&stVersion, 0, sizeof(MMF_VERSION_S));
+ 	memset(&stIniCfg, 0, sizeof(SAMPLE_INI_CFG_S));
+@@ -336,8 +336,6 @@ static int sys_vi_init(void)
+ 			} else {
+ 				stViConfig.astViInfo[i].stChnInfo.enPixFormat = PIXEL_FORMAT_NV21;
+ 			}
+-		} else {
+-			isp_mode = 1;
+ 		}
+ 	}
+ 
+@@ -1085,6 +1083,61 @@ CVI_S32 get_vi_yuv_debug(void)
+ 
+ 	return get_yuv_from_addr(phy_addr_y, phy_addr_uv);
+ }
++
++CVI_S32 resize_yuv_ahd(void)
++{
++	CVI_S32 op, pipe, s32Ret = CVI_SUCCESS;
++	RECT_S stRect = {0, 0, 3840, 2160};
++	SIZE_S stSize = {3840, 2160};
++
++	system("stty erase ^H");
++
++	while (1) {
++		SAMPLE_PRT("select want to change pipe, input 255 to exit:\n");
++		scanf("%d", &pipe);
++		if (pipe == 255) {
++			return s32Ret;
++		}
++		if (pipe >= VI_MAX_PIPE_NUM || pipe < 0) {
++			CVI_TRACE_LOG(CVI_DBG_ERR, "pipe(%d) is invalid!\n", pipe);
++			return s32Ret;
++		}
++		SAMPLE_PRT("select want to change size:\n");
++		SAMPLE_PRT("1: 3840X2160\n");
++		SAMPLE_PRT("2: 2560X1440\n");
++		SAMPLE_PRT("3: 1920X1080\n");
++		SAMPLE_PRT("4: 1280X720\n");
++		scanf("%d", &op);
++
++		switch (op) {
++		case 1:
++			stSize.u32Width = stRect.u32Width = 3840;
++			stSize.u32Height = stRect.u32Height = 2160;
++			break;
++		case 2:
++			stSize.u32Width = stRect.u32Width = 2560;
++			stSize.u32Height = stRect.u32Height = 1440;
++			break;
++		case 3:
++			stSize.u32Width = stRect.u32Width = 1920;
++			stSize.u32Height = stRect.u32Height = 1080;
++			break;
++		case 4:
++			stSize.u32Width = stRect.u32Width = 1280;
++			stSize.u32Height = stRect.u32Height = 720;
++			break;
++		default:
++			break;
++		}
++		s32Ret = CVI_VI_ResizeYuvPath(pipe, &stSize, &stRect);
++		if (s32Ret != CVI_SUCCESS) {
++			CVI_TRACE_LOG(CVI_DBG_ERR, "op(%d) failed with %#x!\n", op, s32Ret);
++		}
++	}
++
++	return s32Ret;
++}
++
+ //#define ENABLE_ISP_TOOL_DAEMON 1
+ //#define JSONRPC_PORT	(5566)
+ //extern void isp_daemon2_init(unsigned int port);
+@@ -1130,6 +1183,7 @@ int main(int argc, char **argv)
+ 		SAMPLE_PRT("7: sensor proc\n");
+ 		SAMPLE_PRT("8: sensor md5 test(for slt_test lt6911)\n");
+ 		SAMPLE_PRT("9: dump vi yuv frame from phyaddr\n");
++		SAMPLE_PRT("10: change YUV AHD size\n");
+ 		SAMPLE_PRT("255: exit\n");
+ 		scanf("%d", &op);
+ 
+@@ -1161,6 +1215,9 @@ int main(int argc, char **argv)
+ 		case 9:
+ 			s32Ret = get_vi_yuv_debug();
+ 			break;
++		case 10:
++			s32Ret = resize_yuv_ahd();
++			break;
+ 		default:
+ 			break;
+ 		}
+-- 
+2.25.1
+

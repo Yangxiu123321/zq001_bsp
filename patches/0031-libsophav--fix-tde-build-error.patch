@@ -1,0 +1,40 @@
+From d17e99bf8d7adc370a6c516c571f4a1e7977bde4 Mon Sep 17 00:00:00 2001
+From: "xiu.yang" <xiu.yang@sophgo.com>
+Date: Tue, 28 Apr 2026 16:06:10 +0800
+Subject: [PATCH] fix:(tde)build error
+
+Change-Id: I20fe97cb334ad0943e2e146452e821e7f65b32f1
+---
+ tde/CMakeLists.txt | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/tde/CMakeLists.txt b/tde/CMakeLists.txt
+index a8babdc..39abc01 100644
+--- a/tde/CMakeLists.txt
++++ b/tde/CMakeLists.txt
+@@ -10,11 +10,11 @@ aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/src/. SRC)
+ 
+ set(TDE_LIB_NAME tde CACHE INTERNAL "tde library name")
+ 
+-link_directories(${CMAKE_CURRENT_SOURCE_DIR}/../vglite/lib/)
+-target_link_libraries(${VGLite_LIB_NAME})
++link_directories(${CMAKE_CURRENT_SOURCE_DIR}/../vglite/LD/)
+ 
+ add_library(${TDE_LIB_NAME} SHARED ${SRC})
+ add_library(${TDE_LIB_NAME}-static STATIC ${SRC})
++target_link_libraries(${TDE_LIB_NAME} ${VGLite_LIB_NAME})
+ # sync static lib name with dynamic lib name
+ set_target_properties(${TDE_LIB_NAME}-static PROPERTIES OUTPUT_NAME ${TDE_LIB_NAME})
+ 
+@@ -41,7 +41,7 @@ else ()
+ endif ()
+ 
+ add_executable(${sample_name} ${SRC})
+-target_link_libraries(${sample_name} ${VGLite_LIB_NAME}-static ${TDE_LIB_NAME}-static bmlib dl m pthread atomic)
++target_link_libraries(${sample_name} ${VGLite_LIB_NAME} ${TDE_LIB_NAME}-static bmlib dl m pthread atomic)
+ 
+ # INSTALL(TARGETS ${sample_name} RUNTIME DESTINATION ${TDE_path}/bin)
+ 
+-- 
+2.25.1
+

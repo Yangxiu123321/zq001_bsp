@@ -1,0 +1,70 @@
+From 3ab1d72b6bb66feee0b55793272fc9bcab39fec8 Mon Sep 17 00:00:00 2001
+From: "shawn.wu" <shawn.wu@sophgo.com>
+Date: Wed, 6 May 2026 21:21:34 +0800
+Subject: [PATCH] fix:add debug info for vi
+
+Change-Id: I436acdf99e470be5a67e5a18e5fb5f8d68fd7a1d
+---
+ interdrv/v2/vi/chip/soph/vi.c         | 18 +++++++++++++-----
+ interdrv/v2/vi/chip/soph/vi_defines.h |  4 ++++
+ 2 files changed, 17 insertions(+), 5 deletions(-)
+
+diff --git a/interdrv/v2/vi/chip/soph/vi.c b/interdrv/v2/vi/chip/soph/vi.c
+index 3d99c341b6..3bb50ed31f 100644
+--- a/interdrv/v2/vi/chip/soph/vi.c
++++ b/interdrv/v2/vi/chip/soph/vi.c
+@@ -201,9 +201,9 @@ static void ddr_try_retrain(struct sop_vi_dev *vdev)
+ 	struct vo_retrain_info vo_info = {0};
+ 	struct timespec64 cur_ts64 = ktime_to_timespec64(ktime_get());
+ 	u64 cur_ts = timespec64_to_ns(&cur_ts64) / NSEC_PER_USEC;
+-	u64 min_sof_ts = __UINT64_MAX__;
++	u64 min_sof_ts = __UINT64_MAX__, max_duration_ts = 100000000;
+ 	int rc = 0;
+-	bool is_blanking = false;
++	bool is_blanking = false, is_time_out = false;
+ 
+ 	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
+ 		if (!vdev->ctx.isp_pipe_enable[raw_num])
+@@ -230,13 +230,21 @@ static void ddr_try_retrain(struct sop_vi_dev *vdev)
+ 		return;
+ 	}
+ 
++	if (!retrain->is_active) {
++		retrain->is_active = true;
++		retrain->win_start_ts = cur_ts;
++		retrain->win_expire_ts = cur_ts + max_duration_ts;
++	}
++
++	is_time_out = retrain->is_active && (cur_ts > retrain->win_expire_ts);
+ 	is_blanking = cur_ts > retrain->max_cur_eof &&
+ 			cur_ts < (min_sof_ts - DDR_RETRAIN_SAFETY_MARGIN_US);
+-	if (is_blanking) {
++	if (is_blanking || is_time_out) {
+ 		iowrite32(ioread32(retrain->gp_reg) | DDR_RETRAIN_GP_TRIGGER_BIT, retrain->gp_reg);
+ 		iowrite32(ioread32(retrain->ddr_reg) & ~DDR_RETRAIN_REG_MODE_MASK, retrain->ddr_reg);
+-		vi_pr(VI_INFO, "ddr_retrain cur_ts(%lld), max_cur_eof(%lld), min_nex_sof(%lld)",
+-				cur_ts, retrain->max_cur_eof, retrain->min_next_sof);
++		vi_pr(VI_INFO, "ddr_retrain cur_ts(%lld), max_cur_eof(%lld), min_nex_sof(%lld), is_time_out(%d), is_blanking(%d)\n",
++				cur_ts, retrain->max_cur_eof, retrain->min_next_sof, is_time_out, is_blanking);
++		retrain->is_active = false;
+ 	}
+ }
+ 
+diff --git a/interdrv/v2/vi/chip/soph/vi_defines.h b/interdrv/v2/vi/chip/soph/vi_defines.h
+index 999eeec25b..a38e5b4ca1 100644
+--- a/interdrv/v2/vi/chip/soph/vi_defines.h
++++ b/interdrv/v2/vi/chip/soph/vi_defines.h
+@@ -50,6 +50,10 @@ struct ddr_retrain {
+ 	struct record_info record_info[ISP_PRERAW_MAX];
+ 	u64 max_cur_eof;
+ 	u64 min_next_sof;
++
++	u64 win_start_ts;
++	u64 win_expire_ts;
++	bool is_active;
+ };
+ 
+ /**
+-- 
+2.25.1
+
